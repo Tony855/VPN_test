@@ -947,18 +947,20 @@ new_client() {
 	key=$(wg genkey)
 	psk=$(wg genpsk)
 	# Configure client in the server
-	cat << EOF >> "$WG_CONF"
+	 cat << EOF >> "$WG_CONF"
 # BEGIN_PEER $client
 [Peer]
 PublicKey = $(wg pubkey <<< "$key")
 PresharedKey = $psk
 AllowedIPs = 10.255.250.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/128")
-# CLIENT_OCTET $octet  # 新增此行记录octet
+# CLIENT_OCTET $octet  # 显式写入 octet
 # END_PEER $client
 EOF
+}
 	# Create client configuration
 	get_export_dir
 	cat << EOF > "${export_dir}router-${octet}.conf"
+[Interface]
 [Interface]
 Address = 10.255.250.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/64")
 DNS = $dns
@@ -1039,7 +1041,8 @@ start_wg_service() {
 
 show_client_qr_code() {
     get_export_dir
-    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    # 从配置文件中提取 octet
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
     qrencode -t UTF8 < "${export_dir}router-${octet}.conf"
     echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
 }
@@ -1105,9 +1108,8 @@ update_wg_conf() {
 }
 
 print_client_added() {
-    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
     echo
-    echo "Configuration available in: ${export_dir}router-${octet}.conf"
+    echo "客户端配置已生成: ${export_dir}router-${octet}.conf"
 }
 
 print_check_clients() {
@@ -1161,7 +1163,8 @@ confirm_remove_client() {
 
 remove_client_conf() {
     get_export_dir
-    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    # 从配置文件中提取 octet
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
     wg_file="${export_dir}router-${octet}.conf"
     if [ -f "$wg_file" ]; then
         echo "Removing $wg_file..."
