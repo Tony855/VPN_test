@@ -904,7 +904,7 @@ select_client_ip() {
     
     if [[ -n "$custom_ip" ]]; then
         until check_ip "$custom_ip" && 
-              [[ "$custom_ip" =~ ^10\.25\.25\.[0-9]+$ ]] && 
+              [[ "$custom_ip" =~ ^10\.255\.250\.[0-9]+$ ]] && 
               [ $(cut -d. -f4 <<< "$custom_ip") -le 254 ] && 
               [ $(cut -d. -f4 <<< "$custom_ip") -ge 2 ] && 
               ! grep -q "AllowedIPs = $custom_ip" "$WG_CONF"; do
