@@ -97,9 +97,12 @@ check_container() {
 # 自动生成 routerXXX 名称
 set_client_name() {
     if [[ "$unsanitized_client" == "auto" || -z "$unsanitized_client" ]]; then
-        max_num=$(grep '^# BEGIN_PEER' "$WG_CONF" | cut -d' ' -f3 | grep -Eo '[0-9]+$' | sort -nr | head -n1)
+        # 获取最大编号时去除前导零
+        max_num=$(grep '^# BEGIN_PEER' "$WG_CONF" | cut -d' ' -f3 | grep -Eo '[0-9]+$' | sed 's/^0*//' | sort -nr | head -n1)
         [ -z "$max_num" ] && max_num=0
-        client="router$(printf "%03d" $((max_num + 1)))"
+        # 强制十进制运算
+        next_num=$((10#$max_num + 1))
+        client="router$(printf "%03d" "$next_num")"
     else
         client=$(sed 's/[^0-9a-zA-Z_-]//g' <<< "$unsanitized_client" | cut -c-15)
     fi
@@ -890,10 +893,10 @@ select_dns() {
 
 # IP分配逻辑（从大到小）
 select_client_ip() {
-    # 查找当前最大已用IP
-    current_max=$(grep "AllowedIPs" "$WG_CONF" | cut -d. -f4 | cut -d/ -f1 | sort -nr | head -n1)
-    [ -z "$current_max" ] && current_max=1  # 初始值为1（254=254）
-    octet=$((254 - current_max))
+    # 获取当前最大 IP 编号（十进制处理）
+    current_max=$(grep "AllowedIPs" "$WG_CONF" | cut -d. -f4 | cut -d/ -f1 | sed 's/^0*//' | sort -nr | head -n1)
+    [ -z "$current_max" ] && current_max=1
+    octet=$((10#254 - 10#$current_max))
 
     # 交互式输入
     echo -e "\nAllowed IP range: \033[32m10.255.250.254 -> 10.255.250.2\033[0m"
