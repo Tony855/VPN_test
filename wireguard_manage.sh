@@ -97,10 +97,9 @@ check_container() {
 # 自动生成 routerXXX 名称
 set_client_name() {
     if [[ "$unsanitized_client" == "auto" || -z "$unsanitized_client" ]]; then
-        # 获取最大编号时去除前导零
+        # 获取当前最大编号（十进制处理）
         max_num=$(grep '^# BEGIN_PEER' "$WG_CONF" | cut -d' ' -f3 | grep -Eo '[0-9]+$' | sed 's/^0*//' | sort -nr | head -n1)
         [ -z "$max_num" ] && max_num=0
-        # 强制十进制运算
         next_num=$((10#$max_num + 1))
         client="router$(printf "%03d" "$next_num")"
     else
@@ -893,30 +892,27 @@ select_dns() {
 
 # IP分配逻辑（从大到小）
 select_client_ip() {
-    # 获取当前最大 IP 编号（十进制处理）
-    current_max=$(grep "AllowedIPs" "$WG_CONF" | cut -d. -f4 | cut -d/ -f1 | sed 's/^0*//' | sort -nr | head -n1)
-    [ -z "$current_max" ] && current_max=1
-    octet=$((10#254 - 10#$current_max))
-
-    # 交互式输入
-    echo -e "\nAllowed IP range: \033[32m10.255.250.254 -> 10.255.250.2\033[0m"
-    read -rp "Enter IP for client [auto]: " custom_ip
+    # 获取当前客户端总数
+    client_count=$(grep -c '^# BEGIN_PEER' "$WG_CONF")
+    # 计算理论IP尾号
+    octet=$((254 - client_count))
     
-    if [[ -n "$custom_ip" ]]; then
-        until check_ip "$custom_ip" && 
-              [[ "$custom_ip" =~ ^10\.255\.250\.[0-9]+$ ]] && 
-              [ $(cut -d. -f4 <<< "$custom_ip") -le 254 ] && 
-              [ $(cut -d. -f4 <<< "$custom_ip") -ge 2 ] && 
-              ! grep -q "AllowedIPs = $custom_ip" "$WG_CONF"; do
-            echo -e "\033[31mInvalid IP or IP already used!\033[0m"
-            read -rp "Enter IP for client [auto]: " custom_ip
-        done
-        octet=$(cut -d. -f4 <<< "$custom_ip")
-    else
-        octet=$((254 - current_max))
+    # 循环检测IP是否被占用
+    while : ; do
         # 跳过网关IP 10.255.250.1
-        [ "$octet" -eq 1 ] && octet=254
-    fi
+        [ "$octet" -eq 1 ] && octet=254 && client_count=0
+        
+        # 检查IP是否已被使用
+        if ! grep -q "10.255.250.$octet/32" "$WG_CONF"; then
+            break
+        else
+            ((client_count++))
+            octet=$((254 - client_count))
+        fi
+        
+        # 防止无限循环
+        [ "$octet" -lt 2 ] && exiterr "IP地址池已耗尽！"
+    done
 }
 
 new_client() {
