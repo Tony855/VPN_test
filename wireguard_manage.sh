@@ -953,11 +953,12 @@ new_client() {
 PublicKey = $(wg pubkey <<< "$key")
 PresharedKey = $psk
 AllowedIPs = 10.255.250.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/128")
+# CLIENT_OCTET $octet  # 新增此行记录octet
 # END_PEER $client
 EOF
 	# Create client configuration
 	get_export_dir
-	cat << EOF > "$export_dir$client".conf
+	cat << EOF > "$export_dirrouter-$octet.conf"
 [Interface]
 Address = 10.255.250.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/64")
 DNS = $dns
@@ -971,9 +972,9 @@ Endpoint = $(grep '^# ENDPOINT' "$WG_CONF" | cut -d " " -f 3):$(grep ListenPort 
 PersistentKeepalive = 25
 EOF
 	if [ "$export_to_home_dir" = 1 ]; then
-		chown "$SUDO_USER:$SUDO_USER" "$export_dir$client".conf
+		chown "$SUDO_USER:$SUDO_USER" "$export_dirrouter-$octet.conf"
 	fi
-	chmod 600 "$export_dir$client".conf
+	chmod 600 "$export_dirrouter-$octet.conf"
 }
 
 update_sysctl() {
@@ -1037,8 +1038,10 @@ start_wg_service() {
 }
 
 show_client_qr_code() {
-	qrencode -t UTF8 < "$export_dir$client".conf
-	echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
+    get_export_dir
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    qrencode -t UTF8 < "$export_dirrouter-$octet.conf"
+    echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
 }
 
 finish_setup() {
@@ -1102,8 +1105,9 @@ update_wg_conf() {
 }
 
 print_client_added() {
-	echo
-	echo "$client added. Configuration available in: $export_dir$client.conf"
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    echo
+    echo "Client added. Configuration available in: $export_dirrouter-$octet.conf"
 }
 
 print_check_clients() {
@@ -1156,12 +1160,13 @@ confirm_remove_client() {
 }
 
 remove_client_conf() {
-	get_export_dir
-	wg_file="$export_dir$client.conf"
-	if [ -f "$wg_file" ]; then
-		echo "Removing $wg_file..."
-		rm -f "$wg_file"
-	fi
+    get_export_dir
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    wg_file="$export_dirrouter-$octet.conf"
+    if [ -f "$wg_file" ]; then
+        echo "Removing $wg_file..."
+        rm -f "$wg_file"
+    fi
 }
 
 print_remove_client() {
