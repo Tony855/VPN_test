@@ -958,7 +958,7 @@ AllowedIPs = 10.255.250.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && e
 EOF
 	# Create client configuration
 	get_export_dir
-	cat << EOF > "$export_dirrouter-$octet.conf"
+	cat << EOF > "${export_dir}router-${octet}.conf"
 [Interface]
 Address = 10.255.250.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/64")
 DNS = $dns
@@ -972,9 +972,9 @@ Endpoint = $(grep '^# ENDPOINT' "$WG_CONF" | cut -d " " -f 3):$(grep ListenPort 
 PersistentKeepalive = 25
 EOF
 	if [ "$export_to_home_dir" = 1 ]; then
-		chown "$SUDO_USER:$SUDO_USER" "$export_dirrouter-$octet.conf"
+		chown "$SUDO_USER:$SUDO_USER" "${export_dir}router-${octet}.conf"
 	fi
-	chmod 600 "$export_dirrouter-$octet.conf"
+	chmod 600 "${export_dir}router-${octet}.conf"
 }
 
 update_sysctl() {
@@ -1040,7 +1040,7 @@ start_wg_service() {
 show_client_qr_code() {
     get_export_dir
     octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
-    qrencode -t UTF8 < "$export_dirrouter-$octet.conf"
+    qrencode -t UTF8 < "${export_dir}router-${octet}.conf"
     echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
 }
 
@@ -1107,7 +1107,7 @@ update_wg_conf() {
 print_client_added() {
     octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
     echo
-    echo "Client added. Configuration available in: $export_dirrouter-$octet.conf"
+    echo "Configuration available in: ${export_dir}router-${octet}.conf"
 }
 
 print_check_clients() {
@@ -1162,7 +1162,7 @@ confirm_remove_client() {
 remove_client_conf() {
     get_export_dir
     octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
-    wg_file="$export_dirrouter-$octet.conf"
+    wg_file="${export_dir}router-${octet}.conf"
     if [ -f "$wg_file" ]; then
         echo "Removing $wg_file..."
         rm -f "$wg_file"
