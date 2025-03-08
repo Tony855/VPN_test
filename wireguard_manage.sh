@@ -933,9 +933,9 @@ new_client() {
 		echo
 		read -rp "Enter IP address for the new client (e.g. 10.255.250.X): " client_ip
 		octet=$(printf '%s' "$client_ip" | cut -d "." -f 4)
-		until [[ $client_ip =~ ^10\.7\.0\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]] \
+		until [[ $client_ip =~ ^10\.255\.250\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]] \
 			&& ! grep AllowedIPs "$WG_CONF" | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "^$octet$"; do
-			if [[ ! $client_ip =~ ^10\.7\.0\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]]; then
+			if [[ ! $client_ip =~ ^10\.255\.250\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]]; then
 				echo "Invalid IP address. Must be within the range 10.255.250.2 to 10.255.250.254."
 			else
 				echo "The IP address is already in use. Please choose another one."
@@ -947,7 +947,7 @@ new_client() {
 	key=$(wg genkey)
 	psk=$(wg genpsk)
 	# Configure client in the server
-	 cat << EOF >> "$WG_CONF"
+	cat << EOF >> "$WG_CONF"
 # BEGIN_PEER $client
 [Peer]
 PublicKey = $(wg pubkey <<< "$key")
@@ -956,11 +956,9 @@ AllowedIPs = 10.255.250.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && e
 # CLIENT_OCTET $octet  # 显式写入 octet
 # END_PEER $client
 EOF
-}
 	# Create client configuration
 	get_export_dir
 	cat << EOF > "${export_dir}router-${octet}.conf"
-[Interface]
 [Interface]
 Address = 10.255.250.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/64")
 DNS = $dns
@@ -1041,7 +1039,6 @@ start_wg_service() {
 
 show_client_qr_code() {
     get_export_dir
-    # 从配置文件中提取 octet
     octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
     qrencode -t UTF8 < "${export_dir}router-${octet}.conf"
     echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
@@ -1058,7 +1055,7 @@ finish_setup() {
 		echo "Finished!"
 	fi
 	echo
-	echo "The client configuration is available in: $export_dir$client.conf"
+	echo "The client configuration is available in: ${export_dir}router-${octet}.conf"
 	echo "New clients can be added by running this script again."
 }
 
@@ -1163,7 +1160,6 @@ confirm_remove_client() {
 
 remove_client_conf() {
     get_export_dir
-    # 从配置文件中提取 octet
     octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
     wg_file="${export_dir}router-${octet}.conf"
     if [ -f "$wg_file" ]; then
@@ -1197,17 +1193,21 @@ print_client_removal_aborted() {
 }
 
 check_client_conf() {
-	wg_file="$export_dir$client.conf"
-	if [ ! -f "$wg_file" ]; then
-		echo "Error: Cannot show QR code. Missing client config file $wg_file" >&2
-		echo "       You may instead re-run this script and add a new client." >&2
-		exit 1
-	fi
+    get_export_dir
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    wg_file="${export_dir}router-${octet}.conf"
+    if [ ! -f "$wg_file" ]; then
+        echo "Error: Cannot show QR code. Missing client config file $wg_file" >&2
+        echo "       You may instead re-run this script and add a new client." >&2
+        exit 1
+    fi
 }
 
 print_client_conf() {
-	echo
-	echo "Configuration for '$client' is available in: $wg_file"
+    get_export_dir
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    echo
+    echo "Configuration for '$client' is available in: ${export_dir}router-${octet}.conf"
 }
 
 confirm_remove_wg() {
