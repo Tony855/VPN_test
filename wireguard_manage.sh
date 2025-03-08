@@ -1039,7 +1039,7 @@ start_wg_service() {
 
 show_client_qr_code() {
     get_export_dir
-    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $3}')
     qrencode -t UTF8 < "${export_dir}router-${octet}.conf"
     echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
 }
@@ -1160,7 +1160,7 @@ confirm_remove_client() {
 
 remove_client_conf() {
     get_export_dir
-    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $3}')
     wg_file="${export_dir}router-${octet}.conf"
     if [ -f "$wg_file" ]; then
         echo "Removing $wg_file..."
@@ -1194,7 +1194,7 @@ print_client_removal_aborted() {
 
 check_client_conf() {
     get_export_dir
-    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $3}')
     wg_file="${export_dir}router-${octet}.conf"
     if [ ! -f "$wg_file" ]; then
         echo "Error: Cannot show QR code. Missing client config file $wg_file" >&2
@@ -1205,7 +1205,7 @@ check_client_conf() {
 
 print_client_conf() {
     get_export_dir
-    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $2}')
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $3}')
     echo
     echo "Configuration for '$client' is available in: ${export_dir}router-${octet}.conf"
 }
