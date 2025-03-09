@@ -104,10 +104,16 @@ parse_args() {
 	while [ "$#" -gt 0 ]; do
 		case $1 in
 			 --serverip)
-                                server_ip="$2"  # 正确捕获参数值
-                                shift
-                                shift
-                                ;;
+				server_ip="$2"  # 正确捕获参数值
+				shift
+				shift
+				;;
+			--addclient)
+				add_client=1
+				unsanitized_client="$2"
+				shift
+				shift
+				;;
 			--listclients)
 				list_clients=1
 				shift
@@ -173,6 +179,9 @@ parse_args() {
 }
 
 check_args() {
+	if [ -n "$server_ip" ] && ! check_ip "$server_ip"; then
+		exiterr "Invalid server IP specified: $server_ip"
+	fi
 	if [ "$auto" != 0 ] && [ -e "$WG_CONF" ]; then
 		show_usage "Invalid parameter '--auto'. WireGuard is already set up on this server."
 	fi
