@@ -103,16 +103,11 @@ set_client_name() {
 parse_args() {
 	while [ "$#" -gt 0 ]; do
 		case $1 in
-			--auto)
-				auto=1
-				shift
-				;;
-			--addclient)
-				add_client=1
-				unsanitized_client="$2"
-				shift
-				shift
-				;;
+			 --serverip)
+                                server_ip="$2"  # 正确捕获参数值
+                                shift
+                                shift
+                                ;;
 			--listclients)
 				list_clients=1
 				shift
