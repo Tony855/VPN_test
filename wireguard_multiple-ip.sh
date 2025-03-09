@@ -384,6 +384,47 @@ EOF
 	exit 1
 }
 
+abort_and_exit() {
+    echo "Abort. No changes were made." >&2
+    exit 1
+}
+
+select_menu_option() {
+    echo
+    echo "WireGuard is already installed."
+    echo
+    echo "Select an option:"
+    echo "   1) Add a new client"
+    echo "   2) List existing clients"
+    echo "   3) Remove an existing client"
+    echo "   4) Show QR code for a client"
+    echo "   5) Remove WireGuard"
+    echo "   6) Exit"
+    read -rp "Option: " option
+    until [[ "$option" =~ ^[1-6]$ ]]; do
+        echo "$option: invalid selection."
+        read -rp "Option: " option
+    done
+}
+
+enter_client_name() {
+    echo
+    echo "Provide a name for the client:"
+    read -rp "Name: " unsanitized_client
+    [ -z "$unsanitized_client" ] && abort_and_exit
+    set_client_name
+    while [[ -z "$client" ]] || grep -q "^# BEGIN_PEER $client$" "$WG_CONF"; do
+        if [ -z "$client" ]; then
+            echo "Invalid client name. Use one word only, no special characters except '-' and '_'."
+        else
+            echo "$client: Client already exists."
+        fi
+        read -rp "Name: " unsanitized_client
+        [ -z "$unsanitized_client" ] && abort_and_exit
+        set_client_name
+    done
+}
+
 show_welcome() {
 	if [ "$auto" = 0 ]; then
 		show_header2
