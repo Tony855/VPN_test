@@ -195,9 +195,9 @@ check_args() {
 			fi
 		done
 	fi
-	if [ "$auto" != 0 ] && [ -e "$WG_CONF" ]; then
-		show_usage "Invalid parameter '--auto'. WireGuard is already set up on this server."
-	fi
+	if [ "$auto" != 0 ] && [ -e "$WG_CONF" ] && [ "$add_client" = 0 ] && [ "$remove_client" = 0 ] && [ "$show_client_qr" = 0 ] && [ "$remove_wg" = 0 ]; then
+    show_usage "Invalid parameter '--auto'. WireGuard is already set up on this server."
+    fi
 	if [ "$((add_client + list_clients + remove_client + show_client_qr))" -gt 1 ]; then
 		show_usage "Specify only one of '--addclient', '--listclients', '--removeclient' or '--showclientqr'."
 	fi
@@ -620,10 +620,14 @@ install_pkgs() {
 			systemctl enable --now firewalld.service >/dev/null
 		)
 	fi
+	if [ $? -ne 0 ]; then
+        exiterr "Failed to install required packages."
+    fi
 }
 
+
 create_server_config() {
-	cat << EOF > "$WG_CONF"
+    cat << EOF > "$WG_CONF"
 # Do not alter these lines
 # ENDPOINT $([[ -n "$public_ip" ]] && echo "$public_ip" || echo "$ip")
 # SERVER_IPS ${server_ips}
@@ -634,7 +638,7 @@ PrivateKey = $(wg genkey)
 ListenPort = $port
 
 EOF
-	chmod 600 "$WG_CONF"
+    chmod 600 "$WG_CONF"
 }
 
 create_firewall_rules() {
@@ -705,31 +709,23 @@ select_client_ip() {
 
 get_server_ip() {
     if [ -n "$server_ip" ]; then
-        if ! check_ip "$server_ip"; then
-            exiterr "Invalid server IP."
-        fi
         echo "$server_ip"
-    else
-        server_ips_line=$(grep '^# SERVER_IPS' "$WG_CONF" | cut -d ' ' -f 3-)
-        if [ -n "$server_ips_line" ]; then
-            IFS=',' read -ra server_ips <<< "$server_ips_line"
-            num_ips=${#server_ips[@]}
-            if [ "$num_ips" -gt 0 ]; then
-                last_ip_index=$(grep '^# LAST_IP_INDEX' "$WG_CONF" | cut -d ' ' -f 3)
-                if [ -z "$last_ip_index" ]; then
-                    current_index=0
-                else
-                    current_index=$(( (last_ip_index + 1) % num_ips ))
-                fi
-                echo "${server_ips[$current_index]}"
-                sed -i "/^# LAST_IP_INDEX/d" "$WG_CONF"
-                echo "# LAST_IP_INDEX $current_index" >> "$WG_CONF"
-                return
-            fi
-        fi
-        global_endpoint=$(grep '^# ENDPOINT' "$WG_CONF" | cut -d " " -f 3)
-        echo "$global_endpoint"
+        return
     fi
+    server_ips_line=$(grep '^# SERVER_IPS' "$WG_CONF" | cut -d ' ' -f 3-)
+    if [ -n "$server_ips_line" ]; then
+        IFS=',' read -ra server_ips <<< "$server_ips_line"
+        num_ips=${#server_ips[@]}
+        if [ "$num_ips" -gt 0 ]; then
+            last_ip_index=$(grep '^# LAST_IP_INDEX' "$WG_CONF" | cut -d ' ' -f 3)
+            current_index=$(( (last_ip_index + 1) % num_ips ))
+            sed -i "/^# LAST_IP_INDEX/d" "$WG_CONF"
+            echo "# LAST_IP_INDEX $current_index" >> "$WG_CONF"
+            echo "${server_ips[$current_index]}"
+            return
+        fi
+    fi
+    grep '^# ENDPOINT' "$WG_CONF" | cut -d " " -f 3
 }
 
 new_client() {
