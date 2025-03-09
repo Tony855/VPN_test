@@ -17,79 +17,87 @@ exiterr3() { exiterr "'yum install' failed."; }
 exiterr4() { exiterr "'zypper install' failed."; }
 
 check_ip() {
-    IP_REGEX='^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
-    printf '%s' "$1" | tr -d '\n' | grep -Eq "$IP_REGEX"
+	IP_REGEX='^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
+	printf '%s' "$1" | tr -d '\n' | grep -Eq "$IP_REGEX"
 }
 
 check_pvt_ip() {
-    IPP_REGEX='^(10|127|172\.(1[6-9]|2[0-9]|3[0-1])|192\.168|169\.254)\.'
-    printf '%s' "$1" | tr -d '\n' | grep -Eq "$IPP_REGEX"
+	IPP_REGEX='^(10|127|172\.(1[6-9]|2[0-9]|3[0-1])|192\.168|169\.254)\.'
+	printf '%s' "$1" | tr -d '\n' | grep -Eq "$IPP_REGEX"
 }
 
 check_dns_name() {
-    FQDN_REGEX='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
-    printf '%s' "$1" | tr -d '\n' | grep -Eq "$FQDN_REGEX"
+	FQDN_REGEX='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+	printf '%s' "$1" | tr -d '\n' | grep -Eq "$FQDN_REGEX"
 }
 
 check_root() {
-    if [ "$(id -u)" != 0 ]; then
-        exiterr "This installer must be run as root. Try 'sudo bash $0'"
-    fi
+	if [ "$(id -u)" != 0 ]; then
+		exiterr "This installer must be run as root. Try 'sudo bash $0'"
+	fi
 }
 
 check_shell() {
-    if readlink /proc/$$/exe | grep -q "dash"; then
-        exiterr 'This installer needs to be run with "bash", not "sh".'
-    fi
+	# Detect Debian users running the script with "sh" instead of bash
+	if readlink /proc/$$/exe | grep -q "dash"; then
+		exiterr 'This installer needs to be run with "bash", not "sh".'
+	fi
 }
 
 check_kernel() {
-    if [[ $(uname -r | cut -d "." -f 1) -eq 2 ]]; then
-        exiterr "The system is running an old kernel, which is incompatible with this installer."
-    fi
+	# Detect OpenVZ 6
+	if [[ $(uname -r | cut -d "." -f 1) -eq 2 ]]; then
+		exiterr "The system is running an old kernel, which is incompatible with this installer."
+	fi
 }
 
 check_os() {
-    if grep -qs "ubuntu" /etc/os-release; then
-        os="ubuntu"
-        os_version=$(grep 'VERSION_ID' /etc/os-release | cut -d '"' -f 2 | tr -d '.')
-    elif [[ -e /etc/debian_version ]]; then
-        os="debian"
-        os_version=$(grep -oE '[0-9]+' /etc/debian_version | head -1)
-    elif [[ -e /etc/almalinux-release || -e /etc/rocky-release || -e /etc/centos-release ]]; then
-        os="centos"
-        os_version=$(grep -shoE '[0-9]+' /etc/almalinux-release /etc/rocky-release /etc/centos-release | head -1)
-    elif [[ -e /etc/fedora-release ]]; then
-        os="fedora"
-        os_version=$(grep -oE '[0-9]+' /etc/fedora-release | head -1)
-    elif [[ -e /etc/SUSE-brand && "$(head -1 /etc/SUSE-brand)" == "openSUSE" ]]; then
-        os="openSUSE"
-        os_version=$(tail -1 /etc/SUSE-brand | grep -oE '[0-9\\.]+')
-    else
-        exiterr "This installer seems to be running on an unsupported distribution."
-    fi
+	if grep -qs "ubuntu" /etc/os-release; then
+		os="ubuntu"
+		os_version=$(grep 'VERSION_ID' /etc/os-release | cut -d '"' -f 2 | tr -d '.')
+	elif [[ -e /etc/debian_version ]]; then
+		os="debian"
+		os_version=$(grep -oE '[0-9]+' /etc/debian_version | head -1)
+	elif [[ -e /etc/almalinux-release || -e /etc/rocky-release || -e /etc/centos-release ]]; then
+		os="centos"
+		os_version=$(grep -shoE '[0-9]+' /etc/almalinux-release /etc/rocky-release /etc/centos-release | head -1)
+	elif [[ -e /etc/fedora-release ]]; then
+		os="fedora"
+		os_version=$(grep -oE '[0-9]+' /etc/fedora-release | head -1)
+	elif [[ -e /etc/SUSE-brand && "$(head -1 /etc/SUSE-brand)" == "openSUSE" ]]; then
+		os="openSUSE"
+		os_version=$(tail -1 /etc/SUSE-brand | grep -oE '[0-9\\.]+')
+	else
+		exiterr "This installer seems to be running on an unsupported distribution.
+Supported distros are Ubuntu, Debian, AlmaLinux, Rocky Linux, CentOS, Fedora and openSUSE."
+	fi
 }
 
 check_os_ver() {
-    if [[ "$os" == "ubuntu" && "$os_version" -lt 2004 ]]; then
-        exiterr "Ubuntu 20.04 or higher is required."
-    fi
-    if [[ "$os" == "debian" && "$os_version" -lt 11 ]]; then
-        exiterr "Debian 11 or higher is required."
-    fi
-    if [[ "$os" == "centos" && "$os_version" -lt 8 ]]; then
-        exiterr "CentOS 8 or higher is required."
-    fi
+	if [[ "$os" == "ubuntu" && "$os_version" -lt 2004 ]]; then
+		exiterr "Ubuntu 20.04 or higher is required to use this installer.
+This version of Ubuntu is too old and unsupported."
+	fi
+	if [[ "$os" == "debian" && "$os_version" -lt 11 ]]; then
+		exiterr "Debian 11 or higher is required to use this installer.
+This version of Debian is too old and unsupported."
+	fi
+	if [[ "$os" == "centos" && "$os_version" -lt 8 ]]; then
+		exiterr "CentOS 8 or higher is required to use this installer.
+This version of CentOS is too old and unsupported."
+	fi
 }
 
 check_container() {
-    if systemd-detect-virt -cq 2>/dev/null; then
-        exiterr "This system is running inside a container, which is not supported."
-    fi
+	if systemd-detect-virt -cq 2>/dev/null; then
+		exiterr "This system is running inside a container, which is not supported by this installer."
+	fi
 }
 
+# 自动生成 routerXXX 名称
 set_client_name() {
     if [[ "$unsanitized_client" == "auto" || -z "$unsanitized_client" ]]; then
+        # 获取当前最大编号（十进制处理）
         max_num=$(grep '^# BEGIN_PEER' "$WG_CONF" | cut -d' ' -f3 | grep -Eo '[0-9]+$' | sed 's/^0*//' | sort -nr | head -n1)
         [ -z "$max_num" ] && max_num=0
         next_num=$((10#$max_num + 1))
@@ -100,103 +108,81 @@ set_client_name() {
 }
 
 parse_args() {
-    while [ "$#" -gt 0 ]; do
-        case $1 in
-            --auto)
-                auto=1
-                shift
-                ;;
-            --addclient)
-                add_client=1
-                unsanitized_client="$2"
-                shift
-                shift
-                while [ "$#" -gt 0 ]; do
-                    case $1 in
-                        --serverip)
-                            serverip="$2"
-                            shift
-                            shift
-                            ;;
-                        --dns1)
-                            dns1="$2"
-                            shift
-                            shift
-                            ;;
-                        --dns2)
-                            dns2="$2"
-                            shift
-                            shift
-                            ;;
-                        *)
-                            break
-                            ;;
-                    esac
-                done
-                ;;
-            --listclients)
-                list_clients=1
-                shift
-                ;;
-            --removeclient)
-                remove_client=1
-                unsanitized_client="$2"
-                shift
-                shift
-                ;;
-            --showclientqr)
-                show_client_qr=1
-                unsanitized_client="$2"
-                shift
-                shift
-                ;;
-            --uninstall)
-                remove_wg=1
-                shift
-                ;;
-            --serveraddr)
-                server_addr="$2"
-                shift
-                shift
-                ;;
-            --port)
-                server_port="$2"
-                shift
-                shift
-                ;;
-            --clientname)
-                first_client_name="$2"
-                shift
-                shift
-                ;;
-            --dns1)
-                dns1="$2"
-                shift
-                shift
-                ;;
-            --dns2)
-                dns2="$2"
-                shift
-                shift
-                ;;
-            -y|--yes)
-                assume_yes=1
-                shift
-                ;;
-            -h|--help)
-                show_usage
-                ;;
-            *)
-                show_usage "Unknown parameter: $1"
-                ;;
-        esac
-    done
+	while [ "$#" -gt 0 ]; do
+		case $1 in
+			--auto)
+				auto=1
+				shift
+				;;
+			--addclient)
+				add_client=1
+				unsanitized_client="$2"
+				shift
+				shift
+				;;
+			--listclients)
+				list_clients=1
+				shift
+				;;
+			--removeclient)
+				remove_client=1
+				unsanitized_client="$2"
+				shift
+				shift
+				;;
+			--showclientqr)
+				show_client_qr=1
+				unsanitized_client="$2"
+				shift
+				shift
+				;;
+			--uninstall)
+				remove_wg=1
+				shift
+				;;
+			--serveraddr)
+				server_addr="$2"
+				shift
+				shift
+				;;
+			--port)
+				server_port="$2"
+				shift
+				shift
+				;;
+			--clientname)
+				first_client_name="$2"
+				shift
+				shift
+				;;
+			--dns1)
+				dns1="$2"
+				shift
+				shift
+				;;
+			--dns2)
+				dns2="$2"
+				shift
+				shift
+				;;
+			-y|--yes)
+				assume_yes=1
+				shift
+				;;
+			-h|--help)
+				show_usage
+				;;
+			*)
+				show_usage "Unknown parameter: $1"
+				;;
+		esac
+	done
 }
 
 check_args() {
-    if [ -n "$serverip" ] && ! check_ip "$serverip"; then
-        exiterr "Invalid server IP provided with --serverip."
-    fi
+	if [ "$auto" != 0 ] && [ -e "$WG_CONF" ]; then
+		show_usage "Invalid parameter '--auto'. WireGuard is already set up on this server."
+	fi
 	if [ "$((add_client + list_clients + remove_client + show_client_qr))" -gt 1 ]; then
 		show_usage "Invalid parameters. Specify only one of '--addclient', '--listclients', '--removeclient' or '--showclientqr'."
 	fi
@@ -362,7 +348,6 @@ Usage: bash $0 [options]
 
 Options:
 
-  --addclient [client name] [--serverip IP]  add a new client with custom server IP
   --addclient [client name]      add a new client
   --dns1 [DNS server IP]         primary DNS server for new client (optional, default: Google Public DNS)
   --dns2 [DNS server IP]         secondary DNS server for new client (optional)
@@ -931,47 +916,49 @@ select_client_ip() {
 }
 
 new_client() {
-    select_client_ip
-    specify_ip=n
-    if [ "$1" = "add_client" ] && [ "$add_client" = 0 ]; then
-        echo
-        read -rp "Do you want to specify an internal IP address for the new client? [y/N]: " specify_ip
-        until [[ "$specify_ip" =~ ^[yYnN]*$ ]]; do
-            echo "$specify_ip: invalid selection."
-            read -rp "Do you want to specify an internal IP address for the new client? [y/N]: " specify_ip
-        done
-    fi
-
-    if [[ "$specify_ip" =~ ^[yY]$ ]]; then
+	select_client_ip
+	specify_ip=n
+	if [ "$1" = "add_client" ] && [ "$add_client" = 0 ]; then
+		echo
+		read -rp "Do you want to specify an internal IP address for the new client? [y/N]: " specify_ip
+		until [[ "$specify_ip" =~ ^[yYnN]*$ ]]; do
+			echo "$specify_ip: invalid selection."
+			read -rp "Do you want to specify an internal IP address for the new client? [y/N]: " specify_ip
+		done
+		if [[ ! "$specify_ip" =~ ^[yY]$ ]]; then
 			echo "Using auto assigned IP address 10.29.29.$octet."
+		fi
 	fi
-
-    if [ "$add_client" = 1 ] && [ -z "$serverip" ]; then
-        echo
-        read -rp "Enter server IP for this client: " serverip
-        until check_ip "$serverip"; do
-            echo "Invalid IP address."
-            read -rp "Enter server IP for this client: " serverip
-        done
-    fi
-
-    key=$(wg genkey)
-    psk=$(wg genpsk)
-    cat << EOF >> "$WG_CONF"
+	if [[ "$specify_ip" =~ ^[yY]$ ]]; then
+		echo
+		read -rp "Enter IP address for the new client (e.g. 10.29.29.X): " client_ip
+		octet=$(printf '%s' "$client_ip" | cut -d "." -f 4)
+		until [[ $client_ip =~ ^10\.29\.29\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]] \
+			&& ! grep AllowedIPs "$WG_CONF" | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "^$octet$"; do
+			if [[ ! $client_ip =~ ^10\.29\.29\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]]; then
+				echo "Invalid IP address. Must be within the range 10.29.29.2 to 10.29.29.254."
+			else
+				echo "The IP address is already in use. Please choose another one."
+			fi
+			read -rp "Enter IP address for the new client (e.g. 10.29.29.X): " client_ip
+			octet=$(printf '%s' "$client_ip" | cut -d "." -f 4)
+		done
+	fi
+	key=$(wg genkey)
+	psk=$(wg genpsk)
+	# Configure client in the server
+	cat << EOF >> "$WG_CONF"
 # BEGIN_PEER $client
 [Peer]
 PublicKey = $(wg pubkey <<< "$key")
 PresharedKey = $psk
 AllowedIPs = 10.29.29.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/128")
-# CLIENT_OCTET $octet
-# CLIENT_SERVER_IP $serverip
+# CLIENT_OCTET $octet  # 显式写入 octet
 # END_PEER $client
 EOF
-
-    get_export_dir
-    endpoint_ip="$serverip"
-    port=$(grep ListenPort "$WG_CONF" | cut -d " " -f 3)
-    cat << EOF > "${export_dir}router-${octet}.conf"
+	# Create client configuration
+	get_export_dir
+	cat << EOF > "${export_dir}router-${octet}.conf"
 [Interface]
 Address = 10.29.29.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/64")
 DNS = $dns
@@ -981,9 +968,13 @@ PrivateKey = $key
 PublicKey = $(grep PrivateKey "$WG_CONF" | cut -d " " -f 3 | wg pubkey)
 PresharedKey = $psk
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = ${endpoint_ip}:${port}
+Endpoint = $(grep '^# ENDPOINT' "$WG_CONF" | cut -d " " -f 3):$(grep ListenPort "$WG_CONF" | cut -d " " -f 3)
 PersistentKeepalive = 25
 EOF
+	if [ "$export_to_home_dir" = 1 ]; then
+		chown "$SUDO_USER:$SUDO_USER" "${export_dir}router-${octet}.conf"
+	fi
+	chmod 600 "${export_dir}router-${octet}.conf"
 }
 
 update_sysctl() {
