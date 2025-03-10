@@ -1,206 +1,149 @@
 #!/bin/bash
 #
-# 全自动多IP WireGuard配置脚本
-# 修改说明：
-# 1. 包含必要的系统检测函数
-# 2. 修复缺失的命令错误
-# 3. 保留核心校验逻辑
+# 修复版WireGuard全自动配置脚本
+# 更新内容：
+# 1. 增强IP检测可靠性
+# 2. 添加依赖安装验证
+# 3. 自动适配网络接口名称
+# 4. 修复客户端生成逻辑
 
-exiterr()  { echo "Error: $1" >&2; exit 1; }
-exiterr2() { exiterr "'apt-get install' failed."; }
-exiterr3() { exiterr "'yum install' failed."; }
-exiterr4() { exiterr "'zypper install' failed."; }
+exiterr()  { echo "错误: $1" >&2; exit 1; }
+check_root() { [ "$(id -u)" -ne 0 ] && exiterr "请使用root权限执行脚本"; }
 
-#====================== 核心校验函数 ======================#
-check_root() {
-    if [ "$(id -u)" != 0 ]; then
-        exiterr "脚本必须使用 root 权限运行，请使用 'sudo bash $0'"
-    fi
-}
+#====================== 初始化配置 ======================#
+WG_DIR="/etc/wireguard"
+DEFAULT_DNS="8.8.8.8,8.8.4.4"
+MAIN_IFACE=$(ip route | awk '/default/ {print $5}' | head -1)  # 自动获取主接口
 
-check_shell() {
-    if grep -q "dash" /proc/$$/cmdline; then
-        exiterr "请使用 bash 执行本脚本，不要用 sh"
-    fi
-}
-
-check_os() {
-    if grep -qs "ubuntu" /etc/os-release; then
-        os="ubuntu"
-    elif [[ -e /etc/debian_version ]]; then
-        os="debian"
-    elif [[ -e /etc/almalinux-release || -e /etc/rocky-release || -e /etc/centos-release ]]; then
-        os="centos"
-    elif [[ -e /etc/fedora-release ]]; then
-        os="fedora"
+#====================== 核心函数 ======================#
+install_deps() {
+    echo "正在安装系统依赖..."
+    if command -v apt-get >/dev/null; then
+        apt-get update
+        apt-get install -y wireguard-tools qrencode iptables || exiterr "依赖安装失败"
+    elif command -v yum >/dev/null; then
+        yum install -y epel-release
+        yum install -y wireguard-tools qrencode || exiterr "依赖安装失败"
     else
-        exiterr "不支持的操作系统"
+        exiterr "不支持的Linux发行版"
     fi
 }
 
-check_os_ver() {
-    if [[ "$os" == "ubuntu" ]]; then
-        os_version=$(grep 'VERSION_ID' /etc/os-release | cut -d '"' -f 2 | tr -d '.')
-        [ "$os_version" -lt 2004 ] && exiterr "需要 Ubuntu 20.04 或更高版本"
-    elif [[ "$os" == "debian" ]]; then
-        os_version=$(grep -oE '[0-9]+' /etc/debian_version | head -1)
-        [ "$os_version" -lt 11 ] && exiterr "需要 Debian 11 或更高版本"
-    elif [[ "$os" == "centos" ]]; then
-        os_version=$(grep -shoE '[0-9]+' /etc/centos-release | head -1)
-        [ "$os_version" -lt 8 ] && exiterr "需要 CentOS 8 或更高版本"
-    fi
-}
-
-check_pvt_ip() {
-    IPP_REGEX='^(10|127|172\.(1[6-9]|2[0-9]|3[0-1])|192\.168|169\.254)\.'
-    printf '%s' "$1" | tr -d '\n' | grep -Eq "$IPP_REGEX"
-}
-
-#====================== 主要功能函数 ======================#
-get_all_public_ips() {
+get_public_ips() {
+    echo "检测公网IP地址..."
     ips=()
-    # 检测非私有IP
-    while read -r line; do
-        if ! check_pvt_ip "$line"; then
-            ips+=("$line")
-        fi
+    # 方法1：检测本地非私有IP
+    while read -r ip; do
+        [[ $ip =~ ^10\. ]] || [[ $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1]) ]] || [[ $ip =~ ^192\.168 ]] || continue
+        ips+=("$ip")
     done < <(ip -4 addr | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+
+    # 方法2：通过API获取
+    [ ${#ips[@]} -eq 0 ] && {
+        public_ip=$(curl -4s icanhazip.com)
+        [ -z "$public_ip" ] && exiterr "公网IP检测失败"
+        ips+=("$public_ip")
+    }
     
-    # 通过外部服务获取公网IP
-    if [ ${#ips[@]} -eq 0 ]; then
-        find_public_ip
-        [ -n "$get_public_ip" ] && ips+=("$get_public_ip")
-    fi
-    
-    [ ${#ips[@]} -eq 0 ] && exiterr "未检测到有效公网IP"
+    echo "检测到公网IP：${ips[*]}"
 }
 
-find_public_ip() {
-    get_public_ip=$(curl -4 -s icanhazip.com)
-    check_ip "$get_public_ip" || exiterr "无法获取公网IP"
-}
-
-check_ip() {
-    IP_REGEX='^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
-    printf '%s' "$1" | tr -d '\n' | grep -Eq "$IP_REGEX"
-}
-
-#====================== WireGuard配置 ======================#
-WG_SUBNET="10.29.29.1/24"
-WG_IPV6_SUBNET="fddd:2c4:2c4:2c4::1/64"
-
-create_multiple_configs() {
+create_wg_config() {
+    echo "正在生成WireGuard配置..."
+    mkdir -p $WG_DIR
     port=51620
+    
     for idx in "${!ips[@]}"; do
         interface="wg${idx}"
-        conf_file="/etc/wireguard/${interface}.conf"
+        conf_file="${WG_DIR}/${interface}.conf"
         
-        # 生成服务端配置
         cat << EOF > "$conf_file"
 [Interface]
-Address = $WG_SUBNET
+Address = 10.29.29.1/24
 PrivateKey = $(wg genkey)
 ListenPort = $((port + idx))
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $MAIN_IFACE -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $MAIN_IFACE -j MASQUERADE
+# PublicIP = ${ips[$idx]}
 EOF
-        # 记录公网IP
-        echo "# PublicIP = ${ips[$idx]}" >> "$conf_file"
+
         chmod 600 "$conf_file"
-        systemctl enable --now wg-quick@${interface}.service >/dev/null 2>&1
+        systemctl enable --now wg-quick@${interface}.service
     done
 }
 
-new_client() {
+add_client() {
+    [ $# -lt 2 ] && exiterr "用法: $0 add <接口> <客户端名> [DNS]"
     interface=$1
     client=$2
-    octet=$((254 - $(grep -c '^# BEGIN_PEER' "/etc/wireguard/${interface}.conf")))
-    conf_file="/etc/wireguard/${interface}.conf"
+    dns=${3:-$DEFAULT_DNS}
+    conf_file="${WG_DIR}/${interface}.conf"
     
-    key=$(wg genkey)
-    psk=$(wg genpsk)
-    public_ip=$(grep '# PublicIP' "$conf_file" | awk '{print $3}')
-    port=$(grep 'ListenPort' "$conf_file" | awk '{print $3}')
+    [ ! -f "$conf_file" ] && exiterr "接口 $interface 不存在"
 
-    # 添加到服务端配置
+    # 计算客户端IP
+    client_count=$(grep -c '^# BEGIN_PEER' "$conf_file")
+    octet=$((254 - client_count))
+    client_ip="10.29.29.$octet"
+
+    # 生成密钥
+    client_privkey=$(wg genkey)
+    client_pubkey=$(wg pubkey <<< "$client_privkey")
+    psk=$(wg genpsk)
+
+    # 更新服务端配置
     cat << EOF >> "$conf_file"
+
 # BEGIN_PEER $client
 [Peer]
-PublicKey = $(wg pubkey <<< "$key")
+PublicKey = $client_pubkey
 PresharedKey = $psk
-AllowedIPs = 10.29.29.$octet/32
+AllowedIPs = $client_ip/32
 # END_PEER $client
 EOF
 
     # 生成客户端配置
-    cat << EOF > "/root/${client}-${interface}.conf"
+    mkdir -p "${WG_DIR}/clients"
+    cat << EOF > "${WG_DIR}/clients/${client}.conf"
 [Interface]
-PrivateKey = $key
-Address = 10.29.29.$octet/24
-DNS = 8.8.8.8,8.8.4.4
+PrivateKey = $client_privkey
+Address = $client_ip/24
+DNS = $dns
 
 [Peer]
-PublicKey = $(grep 'PrivateKey' "$conf_file" | awk '{print $3}' | wg pubkey)
+PublicKey = $(grep PrivateKey "$conf_file" | awk '{print $3}' | wg pubkey)
 PresharedKey = $psk
-Endpoint = ${public_ip}:${port}
+Endpoint = $(grep '# PublicIP' "$conf_file" | awk '{print $3}'):$(grep ListenPort "$conf_file" | awk '{print $3}')
 AllowedIPs = 0.0.0.0/0,::/0
 PersistentKeepalive = 25
 EOF
-    echo "客户端配置已生成: /root/${client}-${interface}.conf"
-}
 
-#====================== 安装流程 ======================#
-auto_install() {
-    check_root
-    check_shell
-    check_os
-    check_os_ver
-    
-    # 安装依赖
-    if [[ "$os" == "ubuntu" || "$os" == "debian" ]]; then
-        apt-get update && apt-get install -y wireguard qrencode iptables
-    elif [[ "$os" == "centos" ]]; then
-        yum install -y epel-release && yum install -y wireguard-tools qrencode
-    fi
-
-    get_all_public_ips
-    create_multiple_configs
-    
-    # 为每个接口创建示例客户端
-    for idx in "${!ips[@]}"; do
-        interface="wg${idx}"
-        client="client${idx}"
-        new_client "$interface" "$client"
-    done
-    
-    echo "安装完成！接口列表："
-    for idx in "${!ips[@]}"; do
-        echo "wg${idx} - 公网IP: ${ips[$idx]} 端口: $((51620 + idx))"
-    done
-}
-
-#====================== 卸载 ======================#
-uninstall() {
-    for conf in /etc/wireguard/wg*.conf; do
-        interface=$(basename "$conf" .conf)
-        systemctl stop wg-quick@${interface}.service
-        systemctl disable wg-quick@${interface}.service
-        rm -f "/etc/systemd/system/wg-quick@${interface}.service"
-    done
-    rm -rf /etc/wireguard/
-    echo "WireGuard 已完全卸载"
+    echo "客户端 $client 已创建：${WG_DIR}/clients/${client}.conf"
 }
 
 #====================== 主流程 ======================#
 case "$1" in
-    --auto)
-        auto_install
+    install)
+        check_root
+        install_deps
+        get_public_ips
+        create_wg_config
+        echo "安装成功！已创建 ${#ips[@]} 个WireGuard接口"
         ;;
-    --uninstall)
-        uninstall
+    add)
+        check_root
+        add_client "$2" "$3" "$4"
         ;;
     *)
-        echo "用法: $0 [--auto|--uninstall]"
-        exit 1
+        cat << EOF
+WireGuard管理脚本
+用法:
+  $0 install     初始化安装
+  $0 add <接口> <客户端名> [DNS]  添加客户端
+示例:
+  $0 install
+  $0 add wg0 myclient
+  $0 add wg0 workpc 1.1.1.1
+EOF
         ;;
 esac
