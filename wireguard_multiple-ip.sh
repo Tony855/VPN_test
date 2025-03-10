@@ -832,6 +832,126 @@ EOF
 	chmod 600 "${export_dir}router-${octet}.conf"
 }
 
+# --- 缺失函数，添加以修正错误 ---
+check_clients() {
+    if ! grep -q "^# BEGIN_PEER " "$WG_CONF"; then
+        echo "No clients found."
+        exit 1
+    fi
+}
+
+show_clients() {
+    echo "Existing clients:"
+    grep "^# BEGIN_PEER " "$WG_CONF" | awk '{print $3}'
+}
+
+print_client_total() {
+    total=$(grep -c "^# BEGIN_PEER " "$WG_CONF")
+    echo "Total clients: $total"
+}
+
+select_client_to() {
+    action="$1"
+    echo "Select a client to $action:"
+    mapfile -t clients < <(grep "^# BEGIN_PEER " "$WG_CONF" | awk '{print $3}')
+    if [ "${#clients[@]}" -eq 0 ]; then
+        echo "No clients found."
+        exit 1
+    fi
+    for i in "${!clients[@]}"; do
+        echo "$((i+1))) ${clients[$i]}"
+    done
+    read -rp "Select client number: " selection
+    if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt "${#clients[@]}" ]; then
+        echo "Invalid selection."
+        exit 1
+    fi
+    client="${clients[$((selection-1))]}"
+}
+
+confirm_remove_client() {
+    read -rp "Are you sure you want to remove client $client? [y/N]: " remove
+}
+
+remove_client_wg() {
+    octet=$(sed -n "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/p" "$WG_CONF" | grep '# CLIENT_OCTET' | awk '{print $3}')
+    sed -i "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/d" "$WG_CONF"
+    if [ -n "$export_dir" ] && [ -f "${export_dir}router-${octet}.conf" ]; then
+        rm -f "${export_dir}router-${octet}.conf"
+    fi
+}
+
+print_client_removed() {
+    echo "Client $client removed successfully."
+}
+
+print_client_removal_aborted() {
+    echo "Client removal aborted."
+}
+
+check_client_conf() {
+    if ! grep -q "^# BEGIN_PEER $client$" "$WG_CONF"; then
+        echo "Client configuration for $client not found."
+        exit 1
+    fi
+}
+
+confirm_remove_wg() {
+    read -rp "Are you sure you want to remove WireGuard? [y/N]: " remove
+}
+
+remove_wg() {
+    systemctl disable --now wg-quick@wg0.service >/dev/null 2>&1
+    rm -f "$WG_CONF"
+    rm -f /etc/systemd/system/wg-iptables.service
+}
+
+print_wg_removed() {
+    echo "WireGuard removed successfully."
+}
+
+print_wg_removal_aborted() {
+    echo "WireGuard removal aborted."
+}
+
+select_dns() {
+    if [ "$auto" = 0 ]; then
+        echo
+        read -rp "Do you want to use a custom DNS? [y/N]: " dns_choice
+        if [[ "$dns_choice" =~ ^[yY]$ ]]; then
+            read -rp "Enter primary DNS IP (default 8.8.8.8): " dns1_input
+            [ -z "$dns1_input" ] && dns1_input="8.8.8.8"
+            read -rp "Enter secondary DNS IP (optional): " dns2_input
+            if [ -n "$dns2_input" ]; then
+                dns="$dns1_input, $dns2_input"
+            else
+                dns="$dns1_input"
+            fi
+        fi
+    fi
+}
+
+get_export_dir() {
+    if [ -z "$export_dir" ]; then
+        if [ "$export_to_home_dir" = 1 ]; then
+            export_dir="/home/$SUDO_USER/"
+        else
+            export_dir="./"
+        fi
+    fi
+}
+
+print_client_added() {
+    echo "Client $client added successfully."
+}
+
+update_rclocal() {
+    if [ -f /etc/rc.local ]; then
+        chmod +x /etc/rc.local
+    fi
+}
+# --- End 缺失函数 ---
+
 update_sysctl() {
 	mkdir -p /etc/sysctl.d
 	echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard-forward.conf
