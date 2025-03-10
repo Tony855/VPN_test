@@ -1,124 +1,129 @@
 #!/bin/bash
-#
-# 修复版WireGuard全自动配置脚本
-# 更新内容：
-# 1. 增强IP检测可靠性
-# 2. 添加依赖安装验证
-# 3. 自动适配网络接口名称
-# 4. 修复客户端生成逻辑
+# 修复版WireGuard自动配置脚本 v2.1
 
-exiterr()  { echo "错误: $1" >&2; exit 1; }
-check_root() { [ "$(id -u)" -ne 0 ] && exiterr "请使用root权限执行脚本"; }
-
-#====================== 初始化配置 ======================#
+#====================== 初始化设置 ======================#
 WG_DIR="/etc/wireguard"
 DEFAULT_DNS="8.8.8.8,8.8.4.4"
-MAIN_IFACE=$(ip route | awk '/default/ {print $5}' | head -1)  # 自动获取主接口
+MAIN_IFACE=$(ip route | awk '/default/{print $5;exit}')  # 动态获取主接口
+declare -a PUBLIC_IPS
 
 #====================== 核心函数 ======================#
+die() { echo -e "\033[31m错误: $1\033[0m" >&2; exit 1; }
+
+check_root() {
+    [ "$(id -u)" -ne 0 ] && die "必须使用root权限运行"
+}
+
 install_deps() {
-    echo "正在安装系统依赖..."
-    if command -v apt-get >/dev/null; then
-        apt-get update
-        apt-get install -y wireguard-tools qrencode iptables || exiterr "依赖安装失败"
-    elif command -v yum >/dev/null; then
-        yum install -y epel-release
-        yum install -y wireguard-tools qrencode || exiterr "依赖安装失败"
+    echo "▶ 正在安装系统依赖..."
+    if command -v apt-get &>/dev/null; then
+        apt-get update || die "更新软件源失败"
+        apt-get install -y --no-install-recommends \
+            wireguard-tools qrencode iptables \
+            || die "安装依赖失败"
+    elif command -v yum &>/dev/null; then
+        yum install -y epel-release || die "EPEL源安装失败"
+        yum install -y wireguard-tools qrencode || die "安装依赖失败"
     else
-        exiterr "不支持的Linux发行版"
+        die "不支持的包管理器"
     fi
 }
 
-get_public_ips() {
-    echo "检测公网IP地址..."
-    ips=()
+detect_public_ips() {
+    echo "▶ 检测公网IP地址..."
     # 方法1：检测本地非私有IP
-    while read -r ip; do
-        [[ $ip =~ ^10\. ]] || [[ $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1]) ]] || [[ $ip =~ ^192\.168 ]] || continue
-        ips+=("$ip")
-    done < <(ip -4 addr | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+    mapfile -t LOCAL_IPS < <(ip -4 addr | awk '/inet /{print $2}' | cut -d/ -f1)
+    for ip in "${LOCAL_IPS[@]}"; do
+        if [[ ! $ip =~ ^10\. && ! $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1]) && ! $ip =~ ^192\.168 ]]; then
+            PUBLIC_IPS+=("$ip")
+        fi
+    done
 
-    # 方法2：通过API获取
-    [ ${#ips[@]} -eq 0 ] && {
-        public_ip=$(curl -4s icanhazip.com)
-        [ -z "$public_ip" ] && exiterr "公网IP检测失败"
-        ips+=("$public_ip")
-    }
+    # 方法2：通过外部API获取
+    if [ ${#PUBLIC_IPS[@]} -eq 0 ]; then
+        API_IP=$(curl -4s icanhazip.com)
+        [ -n "$API_IP" ] && PUBLIC_IPS+=("$API_IP") || die "公网IP检测失败"
+    fi
     
-    echo "检测到公网IP：${ips[*]}"
+    echo "✅ 检测到公网IP：${PUBLIC_IPS[*]}"
 }
 
-create_wg_config() {
-    echo "正在生成WireGuard配置..."
-    mkdir -p $WG_DIR
-    port=51620
+init_wg_config() {
+    echo "▶ 初始化WireGuard配置..."
+    mkdir -p "$WG_DIR" || die "无法创建配置目录"
+    local PORT=51620
     
-    for idx in "${!ips[@]}"; do
-        interface="wg${idx}"
-        conf_file="${WG_DIR}/${interface}.conf"
+    for idx in "${!PUBLIC_IPS[@]}"; do
+        local IFACE="wg${idx}"
+        local CONF="${WG_DIR}/${IFACE}.conf"
         
-        cat << EOF > "$conf_file"
+        # 生成服务端密钥
+        local SERVER_PRIVKEY=$(wg genkey)
+        local SERVER_PUBKEY=$(wg pubkey <<< "$SERVER_PRIVKEY")
+        
+        # 生成配置文件
+        cat > "$CONF" << EOF
 [Interface]
 Address = 10.29.29.1/24
-PrivateKey = $(wg genkey)
-ListenPort = $((port + idx))
+PrivateKey = $SERVER_PRIVKEY
+ListenPort = $((PORT + idx))
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $MAIN_IFACE -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $MAIN_IFACE -j MASQUERADE
-# PublicIP = ${ips[$idx]}
+# PublicIP = ${PUBLIC_IPS[$idx]}
 EOF
-
-        chmod 600 "$conf_file"
-        systemctl enable --now wg-quick@${interface}.service
+        
+        chmod 600 "$CONF"
+        systemctl enable --now "wg-quick@${IFACE}.service" || die "启动服务失败"
+        echo "✅ 接口 ${IFACE} 配置完成"
     done
 }
 
 add_client() {
-    [ $# -lt 2 ] && exiterr "用法: $0 add <接口> <客户端名> [DNS]"
-    interface=$1
-    client=$2
-    dns=${3:-$DEFAULT_DNS}
-    conf_file="${WG_DIR}/${interface}.conf"
+    [ $# -lt 2 ] && die "用法: $0 add <接口> <客户端名> [DNS]"
+    local IFACE="$1" CLIENT="$2" DNS="${3:-$DEFAULT_DNS}"
+    local CONF="${WG_DIR}/${IFACE}.conf"
     
-    [ ! -f "$conf_file" ] && exiterr "接口 $interface 不存在"
-
-    # 计算客户端IP
-    client_count=$(grep -c '^# BEGIN_PEER' "$conf_file")
-    octet=$((254 - client_count))
-    client_ip="10.29.29.$octet"
-
-    # 生成密钥
-    client_privkey=$(wg genkey)
-    client_pubkey=$(wg pubkey <<< "$client_privkey")
-    psk=$(wg genpsk)
-
+    [ -f "$CONF" ] || die "接口配置 $CONF 不存在"
+    
+    # 计算客户端序号
+    local CLIENT_COUNT=$(grep -c '^# BEGIN_PEER' "$CONF")
+    local OCTET=$((254 - CLIENT_COUNT))
+    [ $OCTET -lt 2 ] && die "IP地址池已耗尽"
+    
+    # 生成客户端密钥
+    local CLIENT_PRIVKEY=$(wg genkey)
+    local CLIENT_PUBKEY=$(wg pubkey <<< "$CLIENT_PRIVKEY")
+    local PSK=$(wg genpsk)
+    
     # 更新服务端配置
-    cat << EOF >> "$conf_file"
+    cat >> "$CONF" << EOF
 
-# BEGIN_PEER $client
+# BEGIN_PEER $CLIENT
 [Peer]
-PublicKey = $client_pubkey
-PresharedKey = $psk
-AllowedIPs = $client_ip/32
-# END_PEER $client
+PublicKey = $CLIENT_PUBKEY
+PresharedKey = $PSK
+AllowedIPs = 10.29.29.$OCTET/32
+# END_PEER $CLIENT
 EOF
-
+    
     # 生成客户端配置
     mkdir -p "${WG_DIR}/clients"
-    cat << EOF > "${WG_DIR}/clients/${client}.conf"
+    local CLIENT_CONF="${WG_DIR}/clients/${CLIENT}.conf"
+    cat > "$CLIENT_CONF" << EOF
 [Interface]
-PrivateKey = $client_privkey
-Address = $client_ip/24
-DNS = $dns
+PrivateKey = $CLIENT_PRIVKEY
+Address = 10.29.29.$OCTET/24
+DNS = $DNS
 
 [Peer]
-PublicKey = $(grep PrivateKey "$conf_file" | awk '{print $3}' | wg pubkey)
-PresharedKey = $psk
-Endpoint = $(grep '# PublicIP' "$conf_file" | awk '{print $3}'):$(grep ListenPort "$conf_file" | awk '{print $3}')
-AllowedIPs = 0.0.0.0/0,::/0
+PublicKey = $(wg pubkey <<< "$(awk '/PrivateKey/{print $3}' "$CONF")")
+PresharedKey = $PSK
+Endpoint = $(awk -F' = ' '/# PublicIP/{print $2}' "$CONF"):$(awk '/ListenPort/{print $3}' "$CONF")
+AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
-
-    echo "客户端 $client 已创建：${WG_DIR}/clients/${client}.conf"
+    
+    echo -e "\033[32m✔ 客户端 ${CLIENT} 已创建: ${CLIENT_CONF}\033[0m"
 }
 
 #====================== 主流程 ======================#
@@ -126,9 +131,8 @@ case "$1" in
     install)
         check_root
         install_deps
-        get_public_ips
-        create_wg_config
-        echo "安装成功！已创建 ${#ips[@]} 个WireGuard接口"
+        detect_public_ips
+        init_wg_config
         ;;
     add)
         check_root
@@ -136,14 +140,10 @@ case "$1" in
         ;;
     *)
         cat << EOF
-WireGuard管理脚本
-用法:
-  $0 install     初始化安装
-  $0 add <接口> <客户端名> [DNS]  添加客户端
-示例:
-  $0 install
-  $0 add wg0 myclient
-  $0 add wg0 workpc 1.1.1.1
+WireGuard管理脚本 v2.1
+命令:
+  install  初始化安装
+  add     添加客户端 (示例: $0 add wg0 client1)
 EOF
         ;;
 esac
