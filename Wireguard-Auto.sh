@@ -42,6 +42,8 @@ add_client() {
     [ -f "${CONFIG_DIR}/${iface}.conf" ] || { echo "接口 $iface 不存在"; exit 1; }
     get_interface_info "$iface"
 
+    mkdir -p "$EXPORT_DIR"  # 确保目录存在
+
     CLIENT_ID=$(generate_client_id)
     CLIENT_IP=$(generate_client_ip "$iface")
     CLIENT_CONF="${EXPORT_DIR}/${iface}-${CLIENT_ID}.conf"
@@ -49,6 +51,9 @@ add_client() {
     CLIENT_PRIVKEY=$(wg genkey)
     CLIENT_PUBKEY=$(echo "$CLIENT_PRIVKEY" | wg pubkey)
     CLIENT_PSK=$(wg genpsk)
+
+    # 获取服务端公钥（修正获取方式）
+    SERVER_PUBLIC_KEY=$(awk '/PrivateKey/ {print $3}' "${CONFIG_DIR}/${iface}.conf" | wg pubkey)
 
     # 追加到服务端配置
     cat >> "${CONFIG_DIR}/${iface}.conf" <<EOF
@@ -68,18 +73,26 @@ PrivateKey = ${CLIENT_PRIVKEY}
 DNS = 8.8.8.8,1.1.1.1
 
 [Peer]
-PublicKey = $(wg show "$iface" public-key)
+PublicKey = ${SERVER_PUBLIC_KEY}
 PresharedKey = ${CLIENT_PSK}
 Endpoint = ${PUBLIC_IP}:${PORT}
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 
-    # 同步 WireGuard 配置
-    wg syncconf "$iface" <(wg-quick strip "$iface")
+    # 确保客户端配置文件生成
+    if [ ! -f "$CLIENT_CONF" ]; then
+        echo "❌ 客户端配置文件生成失败: $CLIENT_CONF"
+        exit 1
+    fi
 
-    echo "客户端添加成功 → ${CLIENT_CONF}"
+    # 同步 WireGuard 配置
+    wg addconf "$iface" <(wg-quick strip "$iface")
+
+    echo "✅ 客户端添加成功 → ${CLIENT_CONF}"
+    ls -l "$EXPORT_DIR"  # 确保目录里有文件
 }
+
 
 # 启动 WireGuard 接口
 start_wg_interface() {
