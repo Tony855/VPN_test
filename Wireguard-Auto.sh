@@ -27,9 +27,35 @@ get_interface_info() {
     config_file="${CONFIG_DIR}/${iface}.conf"
     [ -f "$config_file" ] || exiterr "接口 $iface 不存在"
     
-    export SUB_NET=$(awk -F '[ ./]' '/Address/{print $4}' "$config_file")
+    # 修正子网提取逻辑
+    export SUB_NET=$(echo "$iface" | sed 's/wg//')
     export PUBLIC_IP=$(awk -F: '/Endpoint/{print $1}' "${EXPORT_DIR}/${iface}-"* 2>/dev/null | head -1)
     export PORT=$(awk -F= '/ListenPort/{print $2}' "$config_file" | tr -d ' ')
+}
+
+# 安装必要依赖
+install_dependencies() {
+    # 检查iptables
+    if ! command -v iptables &> /dev/null; then
+        echo "正在安装iptables..."
+        if command -v apt-get &> /dev/null; then
+            apt-get update && apt-get install -y iptables
+        elif command -v yum &> /dev/null; then
+            yum install -y iptables
+        else
+            exiterr "无法自动安装iptables，请手动安装"
+        fi
+    fi
+    
+    # 检查WireGuard工具
+    if ! command -v wg &> /dev/null; then
+        echo "正在安装WireGuard..."
+        if command -v apt-get &> /dev/null; then
+            apt-get install -y wireguard
+        elif command -v yum &> /dev/null; then
+            yum install -y wireguard-tools
+        fi
+    fi
 }
 
 # 生成唯一客户端ID
@@ -187,41 +213,60 @@ create_interface() {
     [[ "$iface" =~ ^wg[0-9]+$ ]] || exiterr "接口名必须以wg开头加数字 (如wg0)"
     
     # 生成服务端密钥
+create_interface() {
+    local iface=$1
+    local public_ip=$2
+    local port=$3
+    
+    # 安装依赖
+    install_dependencies
+
+    # 输入验证
+    check_ip "$public_ip" || exiterr "无效IP地址: $public_ip"
+    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -le 65535 ] || exiterr "无效端口号: $port"
+    [[ "$iface" =~ ^wg[0-9]+$ ]] || exiterr "接口名必须以wg开头加数字 (如wg0)"
+
+    # 生成服务端密钥
     SERVER_PRIVKEY=$(wg genkey)
     SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
     
+    # 计算子网（关键修正）
+    interface_num=$(echo "$iface" | sed 's/wg//')
+    subnet="${BASE_SUBNET}.${interface_num}"
+
     # 创建配置文件
     cat > "${CONFIG_DIR}/${iface}.conf" <<EOF
 [Interface]
-Address = ${BASE_SUBNET}.${iface#wg}.1/24
+Address = ${subnet}.1/24
 ListenPort = $port
 PrivateKey = $SERVER_PRIVKEY
 EOF
 
-    # 初始生成10个客户端
+    # 生成初始客户端（移除冗余检查）
     for i in {1..10}; do
         add_client "$iface" >/dev/null
     done
 
-    # 配置防火墙
+    # 配置防火墙（增加SNAT精确绑定）
     if command -v ufw >/dev/null; then
         ufw allow $port/udp
         ufw route allow in on $iface out on eth0
     elif command -v firewall-cmd >/dev/null; then
         firewall-cmd --permanent --add-port=$port/udp
-        firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${BASE_SUBNET}.${iface#wg}.0/24 masquerade"
+        firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${subnet}.0/24 masquerade"
         firewall-cmd --reload
     else
         iptables -A INPUT -p udp --dport $port -j ACCEPT
-        iptables -t nat -A POSTROUTING -s ${BASE_SUBNET}.${iface#wg}.0/24 -j SNAT --to-source $public_ip
+        iptables -t nat -A POSTROUTING -s ${subnet}.0/24 -j SNAT --to-source $public_ip
     fi
 
-    # 启动服务
+    # 启动服务（移除冗余检查）
     wg-quick up "$iface"
     systemctl enable wg-quick@"$iface" >/dev/null 2>&1
     
     echo "接口 ${iface} 创建成功！"
     echo "公网IP: ${public_ip} 端口: ${port}"
+    echo "子网段: ${subnet}.0/24"
     echo "初始客户端配置已生成到: ${EXPORT_DIR}"
 }
 
