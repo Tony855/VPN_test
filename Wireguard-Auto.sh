@@ -75,7 +75,7 @@ EOF
 [Interface]
 Address = ${CLIENT_IP}/24
 PrivateKey = ${CLIENT_PRIVKEY}
-DNS = 8.8.8.8,8.8.4.4
+DNS = 8.8.8.8,1.1.1.1
 
 [Peer]
 PublicKey = $(grep PrivateKey "${CONFIG_DIR}/${iface}.conf" | cut -d' ' -f3 | wg pubkey)
