@@ -57,6 +57,7 @@ generate_client_id() {
 generate_client_ip() {
     local iface=$1
     last_ip=$(grep AllowedIPs "${CONFIG_DIR}/${iface}.conf" | awk -F '[./]' '{print $4}' | sort -n | tail -1)
+    [ -z "$last_ip" ] && last_ip=0  # 处理空值
     echo "${BASE_SUBNET}.${SUB_NET}.$((last_ip + 1))"
 }
 
