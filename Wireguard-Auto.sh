@@ -161,17 +161,17 @@ list_clients() {
     echo "│ 客户端ID   │ 客户端IP      │ 配置文件路径               │"
     echo "├────────────┼───────────────┼─────────────────────────────┤"
     
-    grep -B3 "# client_" "${CONFIG_DIR}/${iface}.conf" | awk -v iface="$iface" '
+    grep -B3 "# client_" "${CONFIG_DIR}/${iface}.conf" | awk -v export_dir="$EXPORT_DIR" -v iface="$iface" '
     /# client_/ {
         client_id=substr($2,2)
         getline
         getline
         split($3, ip, "/")
         printf "│ %-10s │ %-13s │ %-27s │\n", 
-            client_id, ip[1], ENVIRON["EXPORT_DIR"] "/" iface "-" client_id ".conf"
+            client_id, ip[1], export_dir "/" iface "-" client_id ".conf"
     }'
     
-    echo "└────────────┴───────────────┴─────────────────────────────┘"
+    echo "└────────────┴───────────────┴───────────────��─────────────┘"
 }
 
 delete_client() {
@@ -241,7 +241,7 @@ create_interface() {
     if ip link show "$iface" 2>/dev/null; then
         wg-quick down "$iface" 2>/dev/null
         cleanup_residual
-		sleep 1  # 确保清理完成
+        sleep 1  # 确保清理完成
     fi
     
     install_dependencies
