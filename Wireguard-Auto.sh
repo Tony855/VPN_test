@@ -1,5 +1,5 @@
 #!/bin/bash
-# WireGuard高级管理脚本（修正版）
+# WireGuard高级管理脚本（修正版v2.3）
 # 功能：多接口管理 | 客户端管理 | 配置备份恢复
 
 # 错误处理
@@ -20,16 +20,23 @@ start_wg_interface() {
     
     # 确保接口已关闭再重新启动
     wg-quick down "$iface" 2>/dev/null
-    sleep 1
+    sleep 2  # 增加等待时间
     
     if ! wg-quick up "$iface"; then
         exiterr "接口 $iface 启动失败，请检查配置文件！"
     fi
     
-    # 双重检查接口状态
-    if ! ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
-        exiterr "接口 $iface 未成功启动，请检查系统日志！"
-    fi
+    # 双重检查接口状态（增加重试逻辑）
+    local retries=3
+    while ((retries-- > 0)); do
+        if ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
+            return 0
+        fi
+        sleep 1
+        echo "接口状态检查重试剩余: $retries 次"
+        wg-quick up "$iface" 2>/dev/null
+    done
+    exiterr "接口 $iface 未成功启动，请检查系统日志！"
 }
 
 # 获取接口信息（从配置文件直接读取IP和端口）
@@ -49,7 +56,7 @@ get_interface_info() {
 cleanup_residual() {
     echo "正在清理残留WireGuard配置..."
     systemctl stop 'wg-quick@*' 2>/dev/null
-    sleep 1
+    sleep 2  # 延长等待时间
     ip link show | awk -F: '/wireguard/{print $2}' | xargs -r ip link delete
     rm -f "${CONFIG_DIR}"/*.conf
     rm -f "${EXPORT_DIR}"/*.conf
@@ -111,6 +118,11 @@ add_client() {
     check_interface_exists "$iface" || exiterr "请先创建接口"
     get_interface_info "$iface"
     
+    # 确保接口已启动
+    if ! ip link show "$iface" &>/dev/null; then
+        start_wg_interface "$iface"
+    fi
+
     CLIENT_ID=$(generate_client_id)
     CLIENT_IP=$(generate_client_ip "$iface")
     CLIENT_CONF="${EXPORT_DIR}/${iface}-${CLIENT_ID}.conf"
@@ -144,9 +156,22 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 
-    local tmp_conf="${CONFIG_DIR}/${iface}.tmp"
-    wg-quick strip "$iface" > "$tmp_conf"
-    wg syncconf "$iface" "$tmp_conf" || exiterr "配置同步失败，请检查接口状态！"
+    # 使用mktemp生成安全临时文件
+    local tmp_conf=$(mktemp)
+    if ! wg-quick strip "$iface" > "$tmp_conf"; then
+        exiterr "生成临时配置文件失败"
+    fi
+    
+    # 同步前再次检查接口状态
+    if ! ip link show "$iface" &>/dev/null; then
+        start_wg_interface "$iface"
+    fi
+
+    if ! wg syncconf "$iface" "$tmp_conf"; then
+        echo "调试信息 - 临时配置文件内容:"
+        cat "$tmp_conf"
+        exiterr "配置同步失败，请检查接口状态！"
+    fi
     rm -f "$tmp_conf"
     
     echo "客户端添加成功 → ${CLIENT_CONF}"
@@ -361,6 +386,7 @@ check_wg_status() {
     ip link show | grep -A1 "wireguard"
     wg show 2>&1
     ls -l "${CONFIG_DIR}"
+    echo "当前活动接口: $(wg show interfaces)"
     echo "======================================="
 }
 
