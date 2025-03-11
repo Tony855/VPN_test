@@ -14,15 +14,40 @@ DEFAULT_BACKUP_DIR="/var/backups/wireguard"
 
 # ================= 核心功能函数 =================
 
-# 获取接口信息
+# 获取接口信息（从配置文件直接读取IP和端口）
 get_interface_info() {
     local iface=$1
     config_file="${CONFIG_DIR}/${iface}.conf"
     [ -f "$config_file" ] || exiterr "接口 $iface 不存在"
     
     export SUB_NET=$(echo "$iface" | sed 's/wg//')
-    export PUBLIC_IP=$(awk -F: '/Endpoint/{print $1}' "${EXPORT_DIR}/${iface}-"* 2>/dev/null | head -1)
-    export PORT=$(awk -F= '/ListenPort/{print $2}' "$config_file" | tr -d ' ')
+    export PUBLIC_IP=$(awk '/# PublicIP:/ {print $3}' "$config_file")
+    export PORT=$(awk '/# Port:/ {print $3}' "$config_file")
+    [ -z "$PUBLIC_IP" ] && exiterr "未在配置中找到公网IP"
+    [ -z "$PORT" ] && exiterr "未在配置中找到监听端口"
+}
+
+# 清理残留接口和配置
+cleanup_residual() {
+    echo "正在清理残留WireGuard配置..."
+    systemctl stop 'wg-quick@*' 2>/dev/null
+    sleep 1
+    ip link show | awk -F: '/wireguard/{print $2}' | xargs -r ip link delete
+    rm -f "${CONFIG_DIR}"/*.conf
+    rm -f "${EXPORT_DIR}"/*.conf
+    systemctl daemon-reload
+}
+
+# 检查并初始化接口目录
+check_interface_exists() {
+    local iface=$1
+    if [ ! -f "${CONFIG_DIR}/${iface}.conf" ]; then
+        read -p "接口 ${iface} 不存在，是否创建？[y/N] " yn
+        case $yn in
+            [Yy]*) return 1;;  # 返回非0表示需要创建
+            *) exiterr "操作已取消";;
+        esac
+    fi
 }
 
 # 安装必要依赖
@@ -65,6 +90,7 @@ generate_client_ip() {
 
 add_client() {
     local iface=$1
+    check_interface_exists "$iface" || exiterr "请先创建接口"
     get_interface_info "$iface"
     
     CLIENT_ID=$(generate_client_id)
@@ -75,6 +101,7 @@ add_client() {
     CLIENT_PUBKEY=$(echo "$CLIENT_PRIVKEY" | wg pubkey)
     CLIENT_PSK=$(wg genpsk)
 
+    # 追加到服务端配置
     cat >> "${CONFIG_DIR}/${iface}.conf" <<EOF
 
 # ${CLIENT_ID}
@@ -84,6 +111,7 @@ PresharedKey = ${CLIENT_PSK}
 AllowedIPs = ${CLIENT_IP}/32
 EOF
 
+    # 生成客户端配置（确保Endpoint使用正确IP和端口）
     cat > "$CLIENT_CONF" <<EOF
 [Interface]
 Address = ${CLIENT_IP}/24
@@ -187,50 +215,65 @@ create_interface() {
     local public_ip=$2
     local port=$3
     
+    # 清理旧接口
+    if ip link show "$iface" 2>/dev/null; then
+        wg-quick down "$iface" 2>/dev/null
+        cleanup_residual
+    fi
+    
     install_dependencies
-
-    wg-quick up "$iface" || exiterr "接口 $iface 启动失败"
-    systemctl enable wg-quick@"$iface" >/dev/null 2>&1
     check_ip "$public_ip" || exiterr "无效IP地址: $public_ip"
     [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -le 65535 ] || exiterr "无效端口号: $port"
     [[ "$iface" =~ ^wg[0-9]+$ ]] || exiterr "接口名必须以wg开头加数字 (如wg0)"
 
+    # 生成服务端密钥
     SERVER_PRIVKEY=$(wg genkey)
     SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
     
     interface_num=$(echo "$iface" | sed 's/wg//')
     subnet="${BASE_SUBNET}.${interface_num}"
 
+    # 写入服务端配置（包含公网IP和端口注释）
     cat > "${CONFIG_DIR}/${iface}.conf" <<EOF
+# PublicIP: $public_ip
+# Port: $port
 [Interface]
 Address = ${subnet}.1/24
 ListenPort = $port
 PrivateKey = $SERVER_PRIVKEY
 EOF
 
+    # 初始化10个客户端
     for i in {1..10}; do
         add_client "$iface" >/dev/null
     done
 
-    if command -v ufw >/dev/null; then
-        ufw allow $port/udp
-        ufw route allow in on $iface out on eth0
-    elif command -v firewall-cmd >/dev/null; then
-        firewall-cmd --permanent --add-port=$port/udp
-        firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${subnet}.0/24 masquerade"
-        firewall-cmd --reload
-    else
-        iptables -A INPUT -p udp --dport $port -j ACCEPT
-        iptables -t nat -A POSTROUTING -s ${subnet}.0/24 -j SNAT --to-source $public_ip
-    fi
+    # 配置防火墙
+    configure_firewall "$iface" "$port" "$subnet"
 
-    wg-quick up "$iface"
+    # 启动服务
+    wg-quick up "$iface" || exiterr "接口启动失败"
     systemctl enable wg-quick@"$iface" >/dev/null 2>&1
     
     echo "接口 ${iface} 创建成功！"
     echo "公网IP: ${public_ip} 端口: ${port}"
     echo "子网段: ${subnet}.0/24"
     echo "初始客户端配置已生成到: ${EXPORT_DIR}"
+}
+
+configure_firewall() {
+    local iface=$1 port=$2 subnet=$3
+    if command -v ufw >/dev/null; then
+        ufw allow "$port"/udp
+        ufw route allow in on "$iface" out on eth0
+    elif command -v firewall-cmd >/dev/null; then
+        firewall-cmd --permanent --add-port="$port"/udp
+        firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${subnet}.0/24 masquerade"
+        firewall-cmd --reload
+    else
+        iptables -A INPUT -p udp --dport "$port" -j ACCEPT
+        iptables -t nat -A POSTROUTING -s "${subnet}.0/24" -j MASQUERADE
+    fi
 }
 
 # ================= 主控制流程 =================
