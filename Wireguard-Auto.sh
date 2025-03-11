@@ -1,13 +1,6 @@
 #!/bin/bash
-# WireGuard高级管理脚本
+# WireGuard高级管理脚本（修正版）
 # 功能：多接口管理 | 客户端管理 | 配置备份恢复
-# 支持命令：
-#   create [接口] [公网IP] [端口]  创建新接口
-#   add-client [接口]            添加客户端
-#   list-clients [接口]          列出客户端
-#   delete-client [接口] [客户端ID] 删除客户端
-#   backup-config [路径]         备份配置
-#   restore-config [备份文件]     恢复配置
 
 # 错误处理
 exiterr() { echo "错误: $1" >&2; exit 1; }
@@ -27,7 +20,6 @@ get_interface_info() {
     config_file="${CONFIG_DIR}/${iface}.conf"
     [ -f "$config_file" ] || exiterr "接口 $iface 不存在"
     
-    # 修正子网提取逻辑
     export SUB_NET=$(echo "$iface" | sed 's/wg//')
     export PUBLIC_IP=$(awk -F: '/Endpoint/{print $1}' "${EXPORT_DIR}/${iface}-"* 2>/dev/null | head -1)
     export PORT=$(awk -F= '/ListenPort/{print $2}' "$config_file" | tr -d ' ')
@@ -35,7 +27,6 @@ get_interface_info() {
 
 # 安装必要依赖
 install_dependencies() {
-    # 检查iptables
     if ! command -v iptables &> /dev/null; then
         echo "正在安装iptables..."
         if command -v apt-get &> /dev/null; then
@@ -43,11 +34,10 @@ install_dependencies() {
         elif command -v yum &> /dev/null; then
             yum install -y iptables
         else
-            exiterr "无法自动安装iptables，请手动安装"
+            exiterr "无法自动安装iptables"
         fi
     fi
     
-    # 检查WireGuard工具
     if ! command -v wg &> /dev/null; then
         echo "正在安装WireGuard..."
         if command -v apt-get &> /dev/null; then
@@ -76,17 +66,14 @@ add_client() {
     local iface=$1
     get_interface_info "$iface"
     
-    # 生成客户端信息
     CLIENT_ID=$(generate_client_id)
     CLIENT_IP=$(generate_client_ip "$iface")
     CLIENT_CONF="${EXPORT_DIR}/${iface}-${CLIENT_ID}.conf"
     
-    # 生成密钥
     CLIENT_PRIVKEY=$(wg genkey)
     CLIENT_PUBKEY=$(echo "$CLIENT_PRIVKEY" | wg pubkey)
     CLIENT_PSK=$(wg genpsk)
 
-    # 更新服务端配置
     cat >> "${CONFIG_DIR}/${iface}.conf" <<EOF
 
 # ${CLIENT_ID}
@@ -96,7 +83,6 @@ PresharedKey = ${CLIENT_PSK}
 AllowedIPs = ${CLIENT_IP}/32
 EOF
 
-    # 生成客户端配置
     cat > "$CLIENT_CONF" <<EOF
 [Interface]
 Address = ${CLIENT_IP}/24
@@ -111,7 +97,6 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 
-    # 热重载配置
     wg syncconf "$iface" <(wg-quick strip "$iface")
     echo "客户端添加成功 → ${CLIENT_CONF}"
 }
@@ -142,18 +127,12 @@ delete_client() {
     local iface=$1
     local client_id=$2
     
-    # 验证客户端存在
     config_file="${CONFIG_DIR}/${iface}.conf"
     [ -f "${EXPORT_DIR}/${iface}-${client_id}.conf" ] || exiterr "客户端配置文件不存在"
     grep -q "# ${client_id}" "$config_file" || exiterr "客户端未在配置中找到"
 
-    # 删除配置块（4行）
     sed -i "/# ${client_id}/,+3d" "$config_file"
-    
-    # 删除客户端文件
     rm -f "${EXPORT_DIR}/${iface}-${client_id}.conf"
-    
-    # 重载配置
     wg syncconf "$iface" <(wg-quick strip "$iface")
     echo "客户端 ${client_id} 已成功删除"
 }
@@ -207,34 +186,18 @@ create_interface() {
     local public_ip=$2
     local port=$3
     
-    # 输入验证
-    check_ip "$public_ip" || exiterr "无效IP地址: $public_ip"
-    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -le 65535 ] || exiterr "无效端口号: $port"
-    [[ "$iface" =~ ^wg[0-9]+$ ]] || exiterr "接口名必须以wg开头加数字 (如wg0)"
-    
-    # 生成服务端密钥
-create_interface() {
-    local iface=$1
-    local public_ip=$2
-    local port=$3
-    
-    # 安装依赖
     install_dependencies
 
-    # 输入验证
     check_ip "$public_ip" || exiterr "无效IP地址: $public_ip"
     [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -le 65535 ] || exiterr "无效端口号: $port"
     [[ "$iface" =~ ^wg[0-9]+$ ]] || exiterr "接口名必须以wg开头加数字 (如wg0)"
 
-    # 生成服务端密钥
     SERVER_PRIVKEY=$(wg genkey)
     SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
     
-    # 计算子网（关键修正）
     interface_num=$(echo "$iface" | sed 's/wg//')
     subnet="${BASE_SUBNET}.${interface_num}"
 
-    # 创建配置文件
     cat > "${CONFIG_DIR}/${iface}.conf" <<EOF
 [Interface]
 Address = ${subnet}.1/24
@@ -242,12 +205,10 @@ ListenPort = $port
 PrivateKey = $SERVER_PRIVKEY
 EOF
 
-    # 生成初始客户端（移除冗余检查）
     for i in {1..10}; do
         add_client "$iface" >/dev/null
     done
 
-    # 配置防火墙（增加SNAT精确绑定）
     if command -v ufw >/dev/null; then
         ufw allow $port/udp
         ufw route allow in on $iface out on eth0
@@ -260,7 +221,6 @@ EOF
         iptables -t nat -A POSTROUTING -s ${subnet}.0/24 -j SNAT --to-source $public_ip
     fi
 
-    # 启动服务（移除冗余检查）
     wg-quick up "$iface"
     systemctl enable wg-quick@"$iface" >/dev/null 2>&1
     
@@ -301,14 +261,14 @@ main() {
             restore_config "$2"
             ;;
         *)
-            echo "WireGuard高级管理系统 v2.1"
+            echo "WireGuard高级管理系统 v2.2"
             echo "命令列表:"
-            echo "  create [接口名] [IP] [端口]   创建新接口 (例: create wg0 203.0.113.5 51820)"
+            echo "  create [接口名] [IP] [端口]   创建新接口"
             echo "  add-client [接口名]           添加客户端"
             echo "  list-clients [接口名]         查看客户端列表"
-            echo "  delete-client [接口名] [ID]   删除客户端 (例: delete-client wg0 client_1a2b3c4d)"
-            echo "  backup-config [路径]          备份配置到指定路径 (默认: ${DEFAULT_BACKUP_DIR})"
-            echo "  restore-config [备份文件]      从备份恢复配置"
+            echo "  delete-client [接口名] [ID]   删除客户端"
+            echo "  backup-config [路径]          备份配置"
+            echo "  restore-config [备份文件]      恢复配置"
             echo
             echo "配置文件存储:"
             echo "  服务端配置: ${CONFIG_DIR}/"
@@ -318,7 +278,6 @@ main() {
     esac
 }
 
-# 辅助函数
 check_ip() { 
     [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
     for i in ${1//./ }; do
@@ -327,5 +286,4 @@ check_ip() {
     return 0
 }
 
-# 执行主程序
 main "$@"
