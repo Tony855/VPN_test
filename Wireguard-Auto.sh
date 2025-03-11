@@ -189,6 +189,8 @@ create_interface() {
     
     install_dependencies
 
+    wg-quick up "$iface" || exiterr "接口 $iface 启动失败"
+    systemctl enable wg-quick@"$iface" >/dev/null 2>&1
     check_ip "$public_ip" || exiterr "无效IP地址: $public_ip"
     [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -le 65535 ] || exiterr "无效端口号: $port"
     [[ "$iface" =~ ^wg[0-9]+$ ]] || exiterr "接口名必须以wg开头加数字 (如wg0)"
