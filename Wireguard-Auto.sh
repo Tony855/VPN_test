@@ -1,28 +1,39 @@
 #!/bin/bash
-# WireGuard 自动管理脚本（修正版 v3.1）
+# WireGuard 自动管理脚本（修正版 v3.3）
 
 set -e
 
 CONFIG_DIR="/etc/wireguard"
-EXPORT_DIR="$HOME/wg-configs"
+EXPORT_DIR="/etc/wireguard/clients"
 BASE_SUBNET="10.29"
 DEFAULT_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n 1)
 
 check_root() { [ "$(id -u)" -eq 0 ] || { echo "需要 root 权限"; exit 1; }; }
 
 install_dependencies() {
-    echo "检查并安装 WireGuard 及依赖..."
+    echo "检查并安装 WireGuard 及所有依赖..."
     
     # 更新软件包索引
     apt update
     
-    # 安装 WireGuard 和所需工具
-    apt install -y wireguard iptables iproute2 qrencode
+    # 安装 WireGuard 及必要的工具
+    apt install -y wireguard wireguard-tools iptables iproute2 qrencode resolvconf net-tools curl bash-completion ufw dnsutils iptables-persistent netfilter-persistent openresolv jq bc
     
     # 确保 iptables 位置正确
     if [ ! -f "/usr/bin/iptables" ] && [ -f "/usr/sbin/iptables" ]; then
         ln -s /usr/sbin/iptables /usr/bin/iptables
     fi
+
+    # 启用并持久化 iptables 规则
+    systemctl enable netfilter-persistent
+    netfilter-persistent save
+}
+
+# 确保客户端配置目录存在并设置权限
+setup_client_directory() {
+    mkdir -p "$EXPORT_DIR"
+    chmod 755 "$EXPORT_DIR"
+    chown root:root "$EXPORT_DIR"
 }
 
 # 生成客户端 IP
@@ -54,7 +65,7 @@ add_client() {
     [ -f "${CONFIG_DIR}/${iface}.conf" ] || { echo "接口 $iface 不存在"; exit 1; }
     get_interface_info "$iface"
 
-    mkdir -p "$EXPORT_DIR"  # 确保目录存在
+    setup_client_directory  # 确保目录存在
 
     CLIENT_ID=$(generate_client_id)
     CLIENT_IP=$(generate_client_ip "$iface")
@@ -86,11 +97,15 @@ DNS = 8.8.8.8,1.1.1.1
 
 [Peer]
 PublicKey = ${SERVER_PUBLIC_KEY}
-PreshharedKey = ${CLIENT_PSK}
+PresharedKey = ${CLIENT_PSK}
 Endpoint = ${PUBLIC_IP}:${PORT}
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
+
+    # 设置文件权限
+    chmod 600 "$CLIENT_CONF"
+    chown root:root "$CLIENT_CONF"
 
     # 确保客户端配置文件生成
     if [ ! -f "$CLIENT_CONF" ]; then
@@ -117,7 +132,9 @@ create_interface() {
     local iface=$1 public_ip=$2 port=$3
     
     install_dependencies
-    mkdir -p "$CONFIG_DIR" "$EXPORT_DIR"
+    setup_client_directory  # 确保目录存在
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
 
     SERVER_PRIVKEY=$(wg genkey)
     SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
@@ -135,6 +152,9 @@ PostUp = iptables -t nat -A POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE || t
 PostDown = iptables -t nat -D POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE || true
 EOF
 
+    chmod 600 "${CONFIG_DIR}/${iface}.conf"
+    chown root:root "${CONFIG_DIR}/${iface}.conf"
+
     start_wg_interface "$iface"
     echo "接口 ${iface} 创建成功！"
 }
@@ -142,7 +162,7 @@ EOF
 # 主控制流程
 main() {
     check_root
-    mkdir -p "$EXPORT_DIR"
+    setup_client_directory  # 确保目录存在
 
     case $1 in
         create)
@@ -154,7 +174,7 @@ main() {
             add_client "$2"
             ;;
         *)
-            echo "WireGuard 自动管理 v3.1"
+            echo "WireGuard 自动管理 v3.3"
             echo "用法:"
             echo "  $0 create [接口名] [公网IP] [端口]   创建 WireGuard 接口"
             echo "  $0 add-client [接口名]                添加客户端"
