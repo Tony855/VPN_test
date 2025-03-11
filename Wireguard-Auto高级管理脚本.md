@@ -17,17 +17,16 @@ sudo bash wg-manager.sh add-client wg0
 3. 验证接口状态
 wg show wg0
 
-客户端列表查看
+4. 客户端列表查看
 sudo bash wg-manager.sh list-clients wg0
 
-客户端删除
+5. 客户端删除
 sudo bash wg-manager.sh delete-client wg0 client_1a2b
 
-配置备份
+6. 配置备份
 sudo bash wg-manager.sh backup-config /mnt/backups/wg.tgz
 
-配置恢复
-
+7. 配置恢复
 sudo bash wg-manager.sh restore-config /mnt/backups/wg.tgz
 
 客户端ID生成
