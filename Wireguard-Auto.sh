@@ -14,6 +14,24 @@ DEFAULT_BACKUP_DIR="/var/backups/wireguard"
 
 # ================= 核心功能函数 =================
 
+start_wg_interface() {
+    local iface=$1
+    echo "正在启动WireGuard接口: $iface"
+    
+    # 确保接口已关闭再重新启动
+    wg-quick down "$iface" 2>/dev/null
+    sleep 1
+    
+    if ! wg-quick up "$iface"; then
+        exiterr "接口 $iface 启动失败，请检查配置文件！"
+    fi
+    
+    # 双重检查接口状态
+    if ! ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
+        exiterr "接口 $iface 未成功启动，请检查系统日志！"
+    fi
+}
+
 # 获取接口信息（从配置文件直接读取IP和端口）
 get_interface_info() {
     local iface=$1
@@ -126,7 +144,11 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 
-    wg syncconf "$iface" <(wg-quick strip "$iface")
+    local tmp_conf="${CONFIG_DIR}/${iface}.tmp"
+    wg-quick strip "$iface" > "$tmp_conf"
+    wg syncconf "$iface" "$tmp_conf" || exiterr "配置同步失败，请检查接口状态！"
+    rm -f "$tmp_conf"
+    
     echo "客户端添加成功 → ${CLIENT_CONF}"
 }
 
@@ -219,6 +241,7 @@ create_interface() {
     if ip link show "$iface" 2>/dev/null; then
         wg-quick down "$iface" 2>/dev/null
         cleanup_residual
+		sleep 1  # 确保清理完成
     fi
     
     install_dependencies
@@ -252,7 +275,7 @@ EOF
     configure_firewall "$iface" "$port" "$subnet"
 
     # 启动服务
-    wg-quick up "$iface" || exiterr "接口启动失败"
+    start_wg_interface "$iface" || exiterr "接口启动失败"
     systemctl enable wg-quick@"$iface" >/dev/null 2>&1
     
     echo "接口 ${iface} 创建成功！"
@@ -330,6 +353,15 @@ check_ip() {
         [ "$i" -le 255 ] || return 1
     done
     return 0
+}
+
+# ================= 新增日志诊断功能 =================
+check_wg_status() {
+    echo "========== WireGuard诊断信息 =========="
+    ip link show | grep -A1 "wireguard"
+    wg show 2>&1
+    ls -l "${CONFIG_DIR}"
+    echo "======================================="
 }
 
 main "$@"
