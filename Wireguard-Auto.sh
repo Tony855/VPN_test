@@ -17,7 +17,7 @@ install_dependencies() {
     apt update
     
     # 安装 WireGuard 及必要的工具
-    apt install -y wireguard wireguard-tools iptables iproute2 qrencode resolvconf net-tools curl bash-completion ufw dnsutils iptables-persistent netfilter-persistent openresolv jq bc
+    apt install -y wireguard wireguard-tools iptables iproute2 qrencode net-tools curl bash-completion ufw dnsutils iptables-persistent netfilter-persistent openresolv jq bc
     
     # 确保 iptables 位置正确
     if [ ! -f "/usr/bin/iptables" ] && [ -f "/usr/sbin/iptables" ]; then
