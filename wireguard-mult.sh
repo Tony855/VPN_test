@@ -38,14 +38,12 @@ check_root() {
 }
 
 check_shell() {
-	# Detect Debian users running the script with "sh" instead of bash
 	if readlink /proc/$$/exe | grep -q "dash"; then
 		exiterr 'This installer needs to be run with "bash", not "sh".'
 	fi
 }
 
 check_kernel() {
-	# Detect OpenVZ 6
 	if [[ $(uname -r | cut -d "." -f 1) -eq 2 ]]; then
 		exiterr "The system is running an old kernel, which is incompatible with this installer."
 	fi
@@ -95,11 +93,10 @@ check_container() {
 }
 
 set_client_name() {
-	# Allow a limited set of characters to avoid conflicts
-	# Limit to 15 characters for compatibility with Linux clients
 	client=$(sed 's/[^0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-]/_/g' <<< "$unsanitized_client" | cut -c-15)
 }
 
+# -------------------------- 参数解析（新增 --addclient-iface 参数） --------------------------
 parse_args() {
 	while [ "$#" -gt 0 ]; do
 		case $1 in
@@ -110,8 +107,7 @@ parse_args() {
 			--addclient)
 				add_client=1
 				unsanitized_client="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--listclients)
 				list_clients=1
@@ -120,14 +116,12 @@ parse_args() {
 			--removeclient)
 				remove_client=1
 				unsanitized_client="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--showclientqr)
 				show_client_qr=1
 				unsanitized_client="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--uninstall)
 				remove_wg=1
@@ -135,34 +129,35 @@ parse_args() {
 				;;
 			--serveraddr)
 				server_addr="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--port)
 				server_port="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--clientname)
 				first_client_name="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--dns1)
 				dns1="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--dns2)
 				dns2="$2"
-				shift
-				shift
+				shift 2
 				;;
 			--multi)
 				multi_mode=1
 				multi_cfg="$2"
-				shift
-				shift
+				shift 2
+				;;
+			# 新增：指定接口添加客户端命令参数，要求后跟接口名和客户端名称
+			--addclient-iface)
+				add_client_iface=1
+				iface_name="$2"
+				client_for_iface="$3"
+				shift 3
 				;;
 			-y|--yes)
 				assume_yes=1
@@ -177,11 +172,12 @@ parse_args() {
 		esac
 	done
 }
+# -----------------------------------------------------------------------------------------
 
 check_args() {
-	# 如果启用了多接口模式，则不支持客户端管理功能
-	if [ "$multi_mode" = 1 ] && [ "$((add_client + list_clients + remove_client + show_client_qr))" -gt 0 ]; then
-		show_usage "Client management functions are not supported in multi-mode."
+	# 如果启用了多接口模式，则原本禁用客户端管理，但允许--addclient-iface命令
+	if [ "$multi_mode" = 1 ] && [ "$((add_client + list_clients + remove_client + show_client_qr))" -gt 0 ] && [ -z "$add_client_iface" ]; then
+		show_usage "Client management functions are not supported in multi-mode. Use --addclient-iface to add a client to a specific interface."
 	fi
 	if [ "$auto" != 0 ] && [ -e "$WG_CONF" ]; then
 		show_usage "Invalid parameter '--auto'. WireGuard is already set up on this server."
@@ -206,11 +202,11 @@ check_args() {
 		show_usage "Invalid parameters. '--clientname' can only be specified when installing WireGuard."
 	fi
 	if [ -n "$server_addr" ] || [ -n "$server_port" ] || [ -n "$first_client_name" ]; then
-			if [ -e "$WG_CONF" ]; then
-				show_usage "Invalid parameters. WireGuard is already set up on this server."
-			elif [ "$auto" = 0 ]; then
-				show_usage "Invalid parameters. You must specify '--auto' when using these parameters."
-			fi
+		if [ -e "$WG_CONF" ]; then
+			show_usage "Invalid parameters. WireGuard is already set up on this server."
+		elif [ "$auto" = 0 ]; then
+			show_usage "Invalid parameters. You must specify '--auto' when using these parameters."
+		fi
 	fi
 	if [ "$add_client" = 1 ]; then
 		set_client_name
@@ -259,6 +255,20 @@ check_args() {
 		dns="$dns1"
 	else
 		dns="8.8.8.8, 8.8.4.4"
+	fi
+
+	# 新增：如果使用--addclient-iface，则仅在多接口模式下允许此命令
+	if [ "$add_client_iface" = 1 ]; then
+		if [ "$multi_mode" != 1 ]; then
+			show_usage "--addclient-iface can only be used in multi-mode."
+		fi
+		config_file="/etc/wireguard/${iface_name}.conf"
+		if [ ! -f "$config_file" ]; then
+			exiterr "Interface $iface_name not found: $config_file does not exist."
+		fi
+		if [ -z "$client_for_iface" ]; then
+			exiterr "Client name must be provided with --addclient-iface."
+		fi
 	fi
 }
 
@@ -350,12 +360,12 @@ Usage: bash $0 [options]
 
 Options:
 
-  --addclient [client name]      add a new client
+  --addclient [client name]      add a new client (single interface mode)
   --dns1 [DNS server IP]         primary DNS server for new client (optional, default: Google Public DNS)
   --dns2 [DNS server IP]         secondary DNS server for new client (optional)
-  --listclients                  list the names of existing clients
-  --removeclient [client name]   remove an existing client
-  --showclientqr [client name]   show QR code for an existing client
+  --listclients                  list the names of existing clients (single interface mode)
+  --removeclient [client name]   remove an existing client (single interface mode)
+  --showclientqr [client name]   show QR code for an existing client (single interface mode)
   --uninstall                    remove WireGuard and delete all configuration
   -y, --yes                      assume "yes" as answer to prompts when removing a client or removing WireGuard
   -h, --help                     show this help message and exit
@@ -375,7 +385,9 @@ Multi-interface mode:
        Enable multi-interface mode. Each interface will be configured with its own configuration file.
        In this mode, the internal subnet for the first interface will be 10.29.10.0/24 (gateway 10.29.10.1),
        the second 10.29.11.0/24 (gateway 10.29.11.1), etc.
-       Note: Client management functions are disabled in multi-interface mode.
+
+  --addclient-iface [iface] [client name]
+       Add a new client to the specified interface in multi-mode.
 EOF
 	exit 1
 }
@@ -725,7 +737,6 @@ remove_pkgs() {
 }
 
 create_server_config() {
-	# Generate wg0.conf with the new subnet 10.29.10.1/24
 	cat << EOF > "$WG_CONF"
 # Do not alter the commented lines
 # They are used by wireguard-install
@@ -788,171 +799,70 @@ WantedBy=multi-user.target" >> /etc/systemd/system/wg-iptables.service
 	fi
 }
 
-create_firewall_rules_multi() {
-	local port="$1"
-	local subnet="$2"
-	if systemctl is-active --quiet firewalld.service; then
-		firewall-cmd -q --add-port="${port}/udp"
-		firewall-cmd -q --zone=trusted --add-source="$subnet"
-		firewall-cmd -q --permanent --add-port="${port}/udp"
-		firewall-cmd -q --permanent --zone=trusted --add-source="$subnet"
-		firewall-cmd -q --direct --add-rule ipv4 nat POSTROUTING 0 -s "$subnet" ! -d "$subnet" -j MASQUERADE
-		firewall-cmd -q --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s "$subnet" ! -d "$subnet" -j MASQUERADE
-	else
-		local iptables_path
-		iptables_path=$(command -v iptables)
-		echo "[Unit]
-Before=network.target
-[Service]
-Type=oneshot
-ExecStart=$iptables_path -t nat -A POSTROUTING -s $subnet ! -d $subnet -j MASQUERADE
-ExecStart=$iptables_path -I INPUT -p udp --dport $port -j ACCEPT
-ExecStart=$iptables_path -I FORWARD -s $subnet -j ACCEPT
-ExecStart=$iptables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-ExecStop=$iptables_path -t nat -D POSTROUTING -s $subnet ! -d $subnet -j MASQUERADE
-ExecStop=$iptables_path -D INPUT -p udp --dport $port -j ACCEPT
-ExecStop=$iptables_path -D FORWARD -s $subnet -j ACCEPT
-ExecStop=$iptables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-RemainAfterExit=yes
-[Install]
-WantedBy=multi-user.target" > /etc/systemd/system/wg-iptables-${port}.service
-		systemctl enable --now wg-iptables-${port}.service >/dev/null 2>&1
-	fi
-}
-
-get_export_dir() {
-	export_to_home_dir=0
-	export_dir=~/
-	if [ -n "$SUDO_USER" ] && getent group "$SUDO_USER" >/dev/null 2>&1; then
-		user_home_dir=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
-		if [ -d "$user_home_dir" ] && [ "$user_home_dir" != "/" ]; then
-			export_dir="$user_home_dir/"
-			export_to_home_dir=1
-		fi
-	fi
-}
-
-select_dns() {
-	if [ "$auto" = 0 ]; then
-		echo
-		echo "Select a DNS server for the client:"
-		echo "   1) Current system resolvers"
-		echo "   2) Google Public DNS"
-		echo "   3) Cloudflare DNS"
-		echo "   4) OpenDNS"
-		echo "   5) Quad9"
-		echo "   6) AdGuard DNS"
-		echo "   7) Custom"
-		read -rp "DNS server [2]: " dns
-		until [[ -z "$dns" || "$dns" =~ ^[1-7]$ ]]; do
-			echo "$dns: invalid selection."
-			read -rp "DNS server [2]: " dns
-		done
-	else
-		dns=2
-	fi
-	case "$dns" in
-		1)
-			if grep '^nameserver' "/etc/resolv.conf" | grep -qv '127.0.0.53' ; then
-				resolv_conf="/etc/resolv.conf"
-			else
-				resolv_conf="/run/systemd/resolve/resolv.conf"
-			fi
-			dns=$(grep -v '^#\|^;' "$resolv_conf" | grep '^nameserver' | grep -v '127.0.0.53' | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | xargs | sed -e 's/ /, /g')
-		;;
-		2|"")
-			dns="8.8.8.8, 8.8.4.4"
-		;;
-		3)
-			dns="1.1.1.1, 1.0.0.1"
-		;;
-		4)
-			dns="208.67.222.222, 208.67.220.220"
-		;;
-		5)
-			dns="9.9.9.9, 149.112.112.112"
-		;;
-		6)
-			dns="94.140.14.14, 94.140.15.15"
-		;;
-		7)
-			enter_custom_dns
-			if [ -n "$dns2" ]; then
-				dns="$dns1, $dns2"
-			else
-				dns="$dns1"
-			fi
-		;;
-	esac
-}
-
-select_client_ip() {
-	octet=2
-	while grep AllowedIPs "$WG_CONF" | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "^$octet$"; do
-		(( octet++ ))
-	done
-	if [[ "$octet" -eq 255 ]]; then
-		exiterr "253 clients are already configured. The WireGuard internal subnet is full!"
-	fi
-}
-
-new_client() {
-	select_client_ip
-	specify_ip=n
-	if [ "$1" = "add_client" ] && [ "$add_client" = 0 ]; then
-		echo
-		read -rp "Do you want to specify an internal IP address for the new client? [y/N]: " specify_ip
-		until [[ "$specify_ip" =~ ^[yYnN]*$ ]]; do
-			echo "$specify_ip: invalid selection."
-			read -rp "Do you want to specify an internal IP address for the new client? [y/N]: " specify_ip
-		done
-		if [[ ! "$specify_ip" =~ ^[yY]$ ]]; then
-			echo "Using auto assigned IP address 10.29.10.$octet."
-		fi
-	fi
-	if [[ "$specify_ip" =~ ^[yY]$ ]]; then
-		echo
-		read -rp "Enter IP address for the new client (e.g. 10.29.10.X): " client_ip
-		octet=$(printf '%s' "$client_ip" | cut -d "." -f 4)
-		until [[ $client_ip =~ ^10\.29\.10\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]] \
-			&& ! grep AllowedIPs "$WG_CONF" | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "^$octet$"; do
-			if [[ ! $client_ip =~ ^10\.29\.10\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]]; then
-				echo "Invalid IP address. Must be within the range 10.29.10.2 to 10.29.10.254."
-			else
-				echo "The IP address is already in use. Please choose another one."
-			fi
-			read -rp "Enter IP address for the new client (e.g. 10.29.10.X): " client_ip
-			octet=$(printf '%s' "$client_ip" | cut -d "." -f 4)
-		done
-	fi
-	key=$(wg genkey)
-	psk=$(wg genpsk)
-	cat << EOF >> "$WG_CONF"
-# BEGIN_PEER $client
+# 新增：为多接口模式下添加客户端定义的函数 new_client_multi()
+new_client_multi() {
+    local config_file="$1"
+    local client_name="$2"
+    # 从指定配置文件中提取服务器内部IP和子网（假设为 /24）
+    local addr_line
+    addr_line=$(grep "^Address" "$config_file" | head -n1)
+    if [ -z "$addr_line" ]; then
+       exiterr "No Address line found in $config_file"
+    fi
+    local server_ip mask
+    server_ip=$(echo "$addr_line" | awk '{print $3}' | cut -d '/' -f1)
+    mask=$(echo "$addr_line" | awk '{print $3}' | cut -d '/' -f2)
+    local base
+    base=$(echo "$server_ip" | cut -d '.' -f 1-3)
+    local octet=2
+    while grep -q "AllowedIPs = ${base}.${octet}/32" "$config_file"; do
+         octet=$((octet+1))
+         if [ "$octet" -ge 255 ]; then
+              exiterr "No available IP addresses in subnet ${base}.0/24"
+         fi
+    done
+    local client_ip="${base}.${octet}"
+    local key psk
+    key=$(wg genkey)
+    psk=$(wg genpsk)
+    cat << EOF >> "$config_file"
+# BEGIN_PEER ${client_name}
 [Peer]
 PublicKey = $(wg pubkey <<< "$key")
 PresharedKey = $psk
-AllowedIPs = 10.29.10.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/128")
-# END_PEER $client
+AllowedIPs = ${client_ip}/32
+# END_PEER ${client_name}
 EOF
-	get_export_dir
-	cat << EOF > "$export_dir$client".conf
+
+    get_export_dir
+    local client_conf="${export_dir}${client_name}.conf"
+    local server_priv
+    server_priv=$(grep "PrivateKey" "$config_file" | head -n1 | awk '{print $3}')
+    local server_pub
+    server_pub=$(echo "$server_priv" | wg pubkey)
+    local endpoint
+    endpoint=$(grep '^# ENDPOINT' "$config_file" | awk '{print $2}')
+    local listen_port
+    listen_port=$(grep "ListenPort" "$config_file" | awk '{print $3}')
+    cat << EOF > "$client_conf"
 [Interface]
-Address = 10.29.10.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' "$WG_CONF" && echo ", fddd:2c4:2c4:2c4::$octet/64")
+Address = ${client_ip}/24
 DNS = $dns
 PrivateKey = $key
 
 [Peer]
-PublicKey = $(grep PrivateKey "$WG_CONF" | cut -d " " -f 3 | wg pubkey)
+PublicKey = $server_pub
 PresharedKey = $psk
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = $(grep '^# ENDPOINT' "$WG_CONF" | cut -d " " -f 3):$(grep ListenPort "$WG_CONF" | cut -d " " -f 3)
+Endpoint = ${endpoint}:${listen_port}
 PersistentKeepalive = 25
 EOF
-	if [ "$export_to_home_dir" = 1 ]; then
-		chown "$SUDO_USER:$SUDO_USER" "$export_dir$client".conf
-	fi
-	chmod 600 "$export_dir$client".conf
+    if [ "$export_to_home_dir" = 1 ]; then
+        chown "$SUDO_USER:$SUDO_USER" "$client_conf"
+    fi
+    chmod 600 "$client_conf"
+    echo "Client $client_name added to interface $(basename "$config_file" .conf)."
+    echo "Configuration available in: $client_conf"
 }
 
 update_sysctl() {
@@ -1250,11 +1160,22 @@ dns2=""
 
 multi_mode=0
 multi_cfg=""
+add_client_iface=0
+iface_name=""
+client_for_iface=""
 
 parse_args "$@"
 check_args
 
-# 如果启用多接口模式，则执行多接口配置（客户端管理功能在此模式下不可用）
+# 如果启用多接口模式并指定了--addclient-iface，则为指定接口添加客户端
+if [ "$multi_mode" = 1 ] && [ "$add_client_iface" = 1 ]; then
+	config_file="/etc/wireguard/${iface_name}.conf"
+	new_client_multi "$config_file" "$client_for_iface"
+	systemctl restart wg-quick@${iface_name}.service
+	exit 0
+fi
+
+# 多接口模式下自动配置接口
 if [ "$multi_mode" = 1 ]; then
 	IFS=',' read -r -a iface_list <<< "$multi_cfg"
 	index=0
@@ -1458,7 +1379,6 @@ else
 fi
 }
 
-## Defer setup until we have the complete script
 wgsetup "$@"
 
 exit 0
