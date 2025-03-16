@@ -161,7 +161,7 @@ add_client() {
     [ ! -f "$CONFIG_DIR/$iface.conf" ] && { echo "错误: 接口不存在"; return 1; }
 
     ext_if=$(grep 'POSTROUTING' "$CONFIG_DIR/$iface.conf" | awk '{print $9}' | head -1)
-    public_ip=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | awk '{print $NF}' | head -1)
+    public_ip=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | awk '{print $NF}' | head -1 | tr -d '\r\n')
     subnet=$(grep '^Address' "$CONFIG_DIR/$iface.conf" | awk '{print $3}')
 
     client_count=$(ls "$CLIENT_DIR/$iface"/*.conf 2>/dev/null | wc -l)
@@ -202,7 +202,7 @@ DNS = 8.8.8.8, 9.9.9.9
 
 [Peer]
 PublicKey = $(grep 'PrivateKey' "$CONFIG_DIR/$iface.conf" | awk '{print $3}' | wg pubkey)
-Endpoint = ${public_ip}:$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')
+Endpoint = $(echo "$public_ip" | tr -d '\r'):$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
