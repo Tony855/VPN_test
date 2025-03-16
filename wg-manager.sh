@@ -105,7 +105,7 @@ add_client() {
     listen_port=$(awk -F' = ' '/ListenPort/{print $2}' "$CONFIG_DIR/$iface.conf")
     server_public=$(awk -F' = ' '/PrivateKey/{print $2 | "wg pubkey"}' "$CONFIG_DIR/$iface.conf")
     
-    auto_nat_ip=$(awk '/SNAT/ && /PostUp/ {print $12}' "$CONFIG_DIR/$iface.conf" | cut -d':' -f1 | head -1)
+    auto_nat_ip=$(awk '/SNAT/ && /PostUp/ {print $13}' "$CONFIG_DIR/$iface.conf" | cut -d':' -f1 | head -1)
     [ -z "$auto_nat_ip" ] && auto_nat_ip=$auto_endpoint_ip
     
     echo "自动检测到以下配置："
@@ -115,7 +115,16 @@ add_client() {
     
     if [ "$auto_endpoint_ip" = "NONE" ]; then
         echo "警告：无法自动检测公网IP！"
-        confirm="n"
+        while true; do
+            auto_endpoint_ip=$(input_with_default "输入服务器公网IP" "")
+            # 添加IP格式验证逻辑
+            if [[ "$auto_endpoint_ip" =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})$ ]]; then
+                break
+            else
+                echo "错误：IP地址格式无效！"
+            fi
+        done
+        confirm="n"  # 强制手动输入后不再询问确认
     else
         read -p "确认使用自动检测配置？[Y/n] " confirm
     fi
@@ -151,21 +160,21 @@ add_client() {
     }
 
     if [ "$client_nat_ip" = "NONE" ]; then
-        client_nat_ip=""
+        client_nat_ip="$auto_nat_ip"
     fi
 
     client_ip=$(generate_client_ip "$subnet" "$iface")
     client_private=$(wg genkey)
     client_public=$(wg pubkey <<< "$client_private")
+	client_preshared=$(wg genpsk)
     
     # 修正：在服务器配置中插入完整的Peer参数
-    sed -i "/# Last Peer/a [Peer]\n# $client_name\nPublicKey = $client_public\nAllowedIPs = $client_ip/32\nEndpoint = $client_ip:51820\nPersistentKeepalive = 25" "$CONFIG_DIR/$iface.conf"
+    sed -i "/# Last Peer/a [Peer]\n# $client_name\nPublicKey = $client_public\nPresharedKey = $client_preshared\nAllowedIPs = $client_ip/32\nEndpoint = $auto_endpoint_ip:$listen_port\nPersistentKeepalive = 25" "$CONFIG_DIR/$iface.conf"
 
-    if [ -n "$client_nat_ip" ]; then
-        if [[ "$client_nat_ip" =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})$ ]]; then
-            client_subnet="${client_ip%.*}.0/24"
-            rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_subnet -o $auto_ext_if -j SNAT --to-source $client_nat_ip"
-            [ -n "$client_ports" ] && rule_cmd+=" --to-ports $client_ports"
+    if [[ -n "$client_nat_ip" && "$client_nat_ip" != "NONE" ]]; then
+        if [[ "$auto_endpoint_ip" =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})$ ]]; then
+            client_subnet="$client_ip/32"
+            rule_cmd=$(printf "iptables -t nat -I POSTROUTING 1 -s %s -o %s -j SNAT --to-source %s" "$client_subnet" "$auto_ext_if" "$client_nat_ip")
             sed -i "/PostUp/a $rule_cmd" "$CONFIG_DIR/$iface.conf"
             sed -i "/PostDown/a ${rule_cmd/ -I / -D }" "$CONFIG_DIR/$iface.conf"
         else
@@ -183,6 +192,7 @@ DNS = 8.8.8.8, 9.9.9.9
 
 [Peer]
 PublicKey = $server_public
+PresharedKey = $client_preshared  # 新增
 Endpoint = $auto_endpoint_ip:$listen_port
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
