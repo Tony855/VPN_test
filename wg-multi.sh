@@ -53,7 +53,7 @@ create_interface() {
     
     read -p "输入接口名称 (例如 wg0): " iface
     read -p "输入公网出口接口 (例如 eth0): " ext_if
-    read -p "输入监听端口 (默认 51820): " port
+    read -p "输入监听端口 (默认 51620): " port
     read -p "输入内网CIDR (例如 10.10.0.1/24): " subnet
     read -p "输入默认NAT公网IP (留空则不设置): " nat_ip
     
@@ -67,16 +67,7 @@ create_interface() {
 Address = $(echo $subnet | cut -d/ -f1)
 PrivateKey = $server_private
 ListenPort = $port
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT
 EOF
-
-    # 添加默认NAT规则
-    if [ -n "$nat_ip" ]; then
-        echo "PostUp = iptables -t nat -A POSTROUTING -o $ext_if -j SNAT --to-source $nat_ip" >> "$CONFIG_DIR/$iface.conf"
-        echo "PostDown = iptables -t nat -D POSTROUTING -o $ext_if -j SNAT --to-source $nat_ip" >> "$CONFIG_DIR/$iface.conf"
-    fi
-
     systemctl enable --now wg-quick@$iface
     echo "接口 $iface 创建成功！"
 }
@@ -129,7 +120,7 @@ EOF
 [Interface]
 PrivateKey = $client_private
 Address = $client_cidr
-DNS = 8.8.8.8
+DNS = 8.8.8.8, 9.9.9.9
 
 [Peer]
 PublicKey = $server_public
