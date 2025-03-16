@@ -20,7 +20,9 @@ install_dependencies() {
     echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
     
     sysctl_conf=("net.ipv4.ip_forward=1" "net.core.default_qdisc=fq" "net.ipv4.tcp_congestion_control=bbr")
-    for param in "${sysctl_conf[@]}"; do echo "$param" >> /etc/sysctl.conf; done
+    for param in "${sysctl_conf[@]}"; do
+        grep -qxF "$param" /etc/sysctl.conf || echo "$param" >> /etc/sysctl.conf
+    done
     sysctl -p
     echo "系统配置完成！"
 }
@@ -36,7 +38,7 @@ input_with_default() {
 # 生成唯一客户端IP
 generate_client_ip() {
     subnet=$1
-    existing_ips=($(grep AllowedIPs "$CONFIG_DIR/$2.conf" | awk '{print $3}' | cut -d'/' -f1))
+    existing_ips=($(grep AllowedIPs "$CONFIG_DIR/${2}.conf" | awk '{print $3}' | cut -d'/' -f1))
     
     IFS='/' read -r base_ip cidr <<< "$subnet"
     network=$(sipcalc "$subnet" | grep "Network address" -m1 | awk '{print $4}')
@@ -65,7 +67,7 @@ create_interface() {
     
     cat > "$CONFIG_DIR/$iface.conf" <<EOF
 [Interface]
-Address = $base_ip
+Address = $base_ip/24
 PrivateKey = $server_private
 ListenPort = $port
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT
@@ -78,9 +80,10 @@ EOF
     }
 
     systemctl enable --now "wg-quick@$iface" && echo "接口 $iface 创建成功！"
+    echo "# Last Peer" >> "$CONFIG_DIR/$iface.conf"
 }
 
-# 添加客户端
+# 添加客户端（关键修正部分）
 add_client() {
     echo "已存在接口: $(ls $CONFIG_DIR/*.conf | xargs -n1 basename | sed 's/.conf//')"
     iface=$(input_with_default "选择接口名称" "wg0")
@@ -91,9 +94,9 @@ add_client() {
     # 自动获取公网信息（增强检测）
     auto_ext_if=$(ip route show default | awk '/default/ {print $5}' | head -1)
     auto_endpoint_ip=$(
-        curl -4 -s ifconfig.me || 
-        curl -4 -s icanhazip.com || 
-        curl -4 -s ipinfo.io/ip || 
+        curl -4 --max-time 3 -s ifconfig.me || 
+        curl -4 --max-time 3 -s icanhazip.com || 
+        curl -4 --max-time 3 -s ipinfo.io/ip || 
         dig +short myip.opendns.com @resolver1.opendns.com || 
         echo "NONE"
     )
@@ -120,25 +123,26 @@ add_client() {
     [[ "$confirm" =~ [nN] ]] && {
         while true; do
             client_nat_ip=$(input_with_default "自定义NAT公网IP" "$auto_nat_ip")
-            if [ -z "$client_nat_ip" ]; then
-                break
-            elif [[ "$client_nat_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-                valid=true
-                IFS='.' read -ra ip_parts <<< "$client_nat_ip"
-                for part in "${ip_parts[@]}"; do
-                    if (( part > 255 )); then
-                        valid=false
-                        break
-                    fi
-                done
-                if $valid; then
-                    break
-                else
-                    echo "错误：IP地址各段必须小于等于255！"
-                fi
-            else
-                echo "错误：请输入有效的IPv4地址（例如 203.0.113.5）或留空！"
+            client_nat_ip=$(echo "$client_nat_ip" | tr -d '[:space:]')  # 清理输入
+            [ -z "$client_nat_ip" ] && break
+
+            # 增强IP格式验证
+            if [[ ! "$client_nat_ip" =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})$ ]]; then
+                echo "错误：IP地址格式无效！请输入类似 203.0.113.5 的IPv4地址"
+                exit 1
             fi
+
+            IFS='.' read -ra ip_parts <<< "$client_nat_ip"
+            for part in "${ip_parts[@]}"; do
+                if [[ "$part" =~ ^0[0-9]+$ ]]; then
+                    echo "错误：IP地址段 '$part' 包含前导零（示例：192.068.0.1 → 应改为 192.68.0.1）"
+                    exit 1
+                elif (( part > 255 )); then
+                    echo "错误：IP地址段 '$part' 超过255"
+                    exit 1
+                fi
+            done
+            break
         done
         client_ports=$(input_with_default "自定义NAT端口范围" "")
     } || {
@@ -154,10 +158,11 @@ add_client() {
     client_private=$(wg genkey)
     client_public=$(wg pubkey <<< "$client_private")
     
-    sed -i "/# Last Peer/a [Peer]\n# $client_name\nPublicKey = $client_public\nAllowedIPs = $client_ip/32" "$CONFIG_DIR/$iface.conf"
+    # 修正：在服务器配置中插入完整的Peer参数
+    sed -i "/# Last Peer/a [Peer]\n# $client_name\nPublicKey = $client_public\nAllowedIPs = $client_ip/32\nEndpoint = $client_ip:51820\nPersistentKeepalive = 25" "$CONFIG_DIR/$iface.conf"
 
     if [ -n "$client_nat_ip" ]; then
-        if [[ "$client_nat_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        if [[ "$client_nat_ip" =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9]{1,2})$ ]]; then
             client_subnet="${client_ip%.*}.0/24"
             rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_subnet -o $auto_ext_if -j SNAT --to-source $client_nat_ip"
             [ -n "$client_ports" ] && rule_cmd+=" --to-ports $client_ports"
