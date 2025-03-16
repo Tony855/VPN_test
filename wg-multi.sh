@@ -10,6 +10,22 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+install_dependencies() {
+    echo "正在安装依赖和配置系统..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y wireguard-tools iptables iptables-persistent sipcalc
+    
+    echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+    echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+    
+    sysctl_conf=("net.ipv4.ip_forward=1" "net.core.default_qdisc=fq" "net.ipv4.tcp_congestion_control=bbr")
+    for param in "${sysctl_conf[@]}"; do
+        grep -qxF "$param" /etc/sysctl.conf || echo "$param" >> /etc/sysctl.conf
+    done
+    sysctl -p
+    echo "系统配置完成！"
+}
+
 # 创建配置目录
 mkdir -p "$CLIENT_DIR"
 
