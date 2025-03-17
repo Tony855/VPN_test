@@ -183,14 +183,14 @@ add_client() {
 # $client_name
 PublicKey = $client_public
 PresharedKey = $client_preshared
-AllowedIPs = $client_ip/32
+AllowedIPs = $client_ip/24
 EOF
 
     read -p "是否为该客户端指定独立公网IP？(y/N) " custom_ip
     if [[ $custom_ip =~ ^[Yy]$ ]]; then
         read -p "输入自定义公网IP: " client_nat_ip
-        rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_ip/32 -o $ext_if -j MASQUERADE --to-source $client_nat_ip"
-        post_down_cmd="iptables -t nat -D POSTROUTING -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
+        rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_ip/24 -o $ext_if -j MASQUERADE --to-source $client_nat_ip"
+        post_down_cmd="iptables -t nat -D POSTROUTING -s $client_ip/24 -o $ext_if -j SNAT --to-source $client_nat_ip"
         
         sed -i "/PostUp/a $rule_cmd" "$CONFIG_DIR/$iface.conf"
         sed -i "/PostDown/a $post_down_cmd" "$CONFIG_DIR/$iface.conf"
@@ -203,7 +203,7 @@ EOF
     cat > "$client_file" <<EOF
 [Interface]
 PrivateKey = $client_private
-Address = $client_ip/32
+Address = $client_ip/24
 DNS = 8.8.8.8, 9.9.9.9
 
 [Peer]
