@@ -175,19 +175,21 @@ add_client() {
     client_ip=$(generate_client_ip "$subnet" "$iface")
     client_private=$(wg genkey)
     client_public=$(echo "$client_private" | wg pubkey)
+    client_preshared=$(wg genpsk)  # 生成PresharedKey
 
     cat >> "$CONFIG_DIR/$iface.conf" <<EOF
 
 [Peer]
 # $client_name
 PublicKey = $client_public
+PresharedKey = $client_preshared
 AllowedIPs = $client_ip/32
 EOF
 
     read -p "是否为该客户端指定独立公网IP？(y/N) " custom_ip
     if [[ $custom_ip =~ ^[Yy]$ ]]; then
         read -p "输入自定义公网IP: " client_nat_ip
-        rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
+        rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_ip/32 -o $ext_if -j MASQUERADE --to-source $client_nat_ip"
         post_down_cmd="iptables -t nat -D POSTROUTING -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
         
         sed -i "/PostUp/a $rule_cmd" "$CONFIG_DIR/$iface.conf"
@@ -206,6 +208,7 @@ DNS = 8.8.8.8, 9.9.9.9
 
 [Peer]
 PublicKey = $(grep 'PrivateKey' "$CONFIG_DIR/$iface.conf" | awk '{print $3}' | wg pubkey)
+PresharedKey = $client_preshared
 Endpoint = $(echo "$public_ip" | tr -d '\r'):$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
@@ -214,7 +217,14 @@ EOF
     qrencode -t ansiutf8 < "$client_file"
     qrencode -o "${client_file}.png" < "$client_file"
 
-    wg syncconf "$iface" <(wg-quick strip "$iface") >/dev/null 2>&1
+    # 重启接口以确保配置生效
+    if systemctl restart "wg-quick@$iface" &>/dev/null; then
+        echo "接口 $iface 已重启"
+    else
+        echo "警告: 接口重启失败，尝试动态加载配置..."
+        wg syncconf "$iface" <(wg-quick strip "$iface")
+    fi
+
     echo "客户端 $client_name 添加成功！"
     echo "出口公网IP: ${client_nat_ip:-$public_ip}"
     echo "配置文件路径：$client_file"
