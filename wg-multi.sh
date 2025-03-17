@@ -123,14 +123,14 @@ create_interface() {
     [ -z "$ext_if" ] && { echo "错误: 未找到默认出口接口"; rollback_ip_allocation "$public_ip"; return 1; }
 
     port=$(get_available_port)
-    subnet="10.10.${new_interface}.1/24"  # 使用新接口编号生成子网
+    subnet="10.10.${new_interface}.0/24"  # 使用新接口编号生成子网
 
     server_private=$(wg genkey)
     server_public=$(echo "$server_private" | wg pubkey)
 
     cat > "$CONFIG_DIR/$iface.conf" <<EOF
 [Interface]
-Address = $(cut -d/ -f1 <<< "$subnet")
+Address = 10.10.${new_interface}.1
 PrivateKey = $server_private
 ListenPort = $port
 
