@@ -183,7 +183,7 @@ add_client() {
 # $client_name
 PublicKey = $client_public
 PresharedKey = $client_preshared
-AllowedIPs = $client_ip/24
+AllowedIPs = $client_ip/32
 EOF
 
     read -p "是否为该客户端指定独立公网IP？(y/N) " custom_ip
