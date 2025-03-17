@@ -135,7 +135,7 @@ PrivateKey = $server_private
 ListenPort = $port
 
 # NAT规则（使用正确的子网地址）
-PostUp = iptables -t nat -A POSTROUTING -s 10.10.${new_interface}.0/24 -o $ext_if -j SNAT --to-source $public_ip
+PostUp = iptables -t nat -I POSTROUTING 1 -s 10.10.${new_interface}.0/24 -o $ext_if -j SNAT --to-source $public_ip
 PostDown = iptables -t nat -D POSTROUTING -s 10.10.${new_interface}.0/24 -o $ext_if -j SNAT --to-source $public_ip
 EOF
 
