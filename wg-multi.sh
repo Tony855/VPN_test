@@ -138,6 +138,8 @@ PostUp = iptables -t nat -A POSTROUTING -s 10.10.${new_interface}.0/24 -o $ext_i
 PostDown = iptables -t nat -D POSTROUTING -s 10.10.${new_interface}.0/24 -o $ext_if -j SNAT --to-source $public_ip
 EOF
 
+    chmod 600 "$CONFIG_DIR/$iface.conf"
+
     if systemctl enable --now "wg-quick@$iface" &>/dev/null; then
         echo "接口 $iface 创建成功！"
         echo "分配公网IP: $public_ip"
