@@ -105,12 +105,11 @@ create_interface() {
     public_ip=$(get_available_public_ip) || { echo "$public_ip"; return 1; }
     mark_ip_used "$public_ip"
     
-    # 计算新接口编号 ----------------------------------------------------
+    # 计算新接口编号
     existing_interfaces=$(ls "$CONFIG_DIR"/wg*.conf 2>/dev/null | sed 's/.*wg\([0-9]\+\).conf/\1/' 2>/dev/null | sort -n)
     max_interface=$(echo "$existing_interfaces" | tail -n 1)
     [ -z "$max_interface" ] && max_interface=-1
     new_interface=$((max_interface + 1))
-    # -------------------------------------------------------------------
 
     default_iface="wg${new_interface}"
     read -p "输入接口名称（默认 $default_iface）: " iface
@@ -123,19 +122,19 @@ create_interface() {
     [ -z "$ext_if" ] && { echo "错误: 未找到默认出口接口"; rollback_ip_allocation "$public_ip"; return 1; }
 
     port=$(get_available_port)
-    subnet="10.10.${new_interface}.0/24"  # 使用新接口编号生成子网
+    subnet="10.10.${new_interface}.0/24"  # 修正为正确子网
 
     server_private=$(wg genkey)
     server_public=$(echo "$server_private" | wg pubkey)
 
     cat > "$CONFIG_DIR/$iface.conf" <<EOF
 [Interface]
-Address = 10.10.${new_interface}.1
+Address = 10.10.${new_interface}.1  # 子网网关
 PrivateKey = $server_private
 ListenPort = $port
 
-# NAT规则（使用正确的子网地址）
-PostUp = iptables -t nat -I POSTROUTING 1 -s 10.10.${new_interface}.0/24 -o $ext_if -j SNAT --to-source $public_ip
+# NAT规则（仅处理无独立IP的客户端）
+PostUp = iptables -t nat -A POSTROUTING -s 10.10.${new_interface}.0/24 -o $ext_if -j SNAT --to-source $public_ip
 PostDown = iptables -t nat -D POSTROUTING -s 10.10.${new_interface}.0/24 -o $ext_if -j SNAT --to-source $public_ip
 EOF
 
@@ -187,9 +186,12 @@ EOF
     if [[ $custom_ip =~ ^[Yy]$ ]]; then
         read -p "输入自定义公网IP: " client_nat_ip
         rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
+        post_down_cmd="${rule_cmd/-I POSTROUTING 1/-D POSTROUTING}"  # 修正删除命令
         
         sed -i "/PostUp/a $rule_cmd" "$CONFIG_DIR/$iface.conf"
-        sed -i "/PostDown/a ${rule_cmd/ -I / -D }" "$CONFIG_DIR/$iface.conf"
+        sed -i "/PostDown/a $post_down_cmd" "$CONFIG_DIR/$iface.conf"
+        
+        eval "$rule_cmd"  # 立即生效新增规则
     fi
 
     mkdir -p "$CLIENT_DIR/$iface"
