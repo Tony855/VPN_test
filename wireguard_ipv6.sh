@@ -20,7 +20,7 @@ fi
 install_dependencies() {
     echo "正在安装依赖和配置系统..."
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update && apt-get install -y wireguard-tools iptables ip6tables iptables-persistent sipcalc qrencode curl
+    apt-get update && apt-get install -y wireguard-tools iptables iptables-persistent sipcalc qrencode curl
 
     # 自动保存iptables规则
     echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
