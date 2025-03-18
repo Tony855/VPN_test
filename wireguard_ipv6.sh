@@ -128,15 +128,25 @@ generate_client_ip() {
         echo "错误: IPv6子网中没有可用地址"
         return 1
     else
-        # IPv4地址分配
-        network_info=$(ipcalc "$subnet")
-        network_start=$(echo "$network_info" | grep "Network address" | awk '{print $4}')
-        IFS='.' read -r a b c d <<< "$network_start"
-        for i in $(seq 2 254); do
-            candidate_ip="$a.$b.$c.$((d + i))"
-            [[ " ${existing_ips[@]} " =~ " $candidate_ip " ]] || break
+        # IPv4地址分配（修复部分）
+        network_info=$(ipcalc -b "$subnet")
+        hostmin=$(echo "$network_info" | grep 'HostMin' | awk '{print $2}')
+        hostmax=$(echo "$network_info" | grep 'HostMax' | awk '{print $2}')
+
+        IFS='.' read -r a b c d_start <<< "$hostmin"
+        IFS='.' read -r a b c d_end <<< "$hostmax"
+
+        # 从hostmin的下一个IP开始分配（避免分配网关IP）
+        for ((i=d_start+1; i<=d_end; i++)); do
+            candidate_ip="$a.$b.$c.$i"
+            if ! [[ " ${existing_ips[@]} " =~ " $candidate_ip " ]]; then
+                echo "$candidate_ip"
+                return 0
+            fi
         done
-        echo "$candidate_ip"
+
+        echo "错误: IPv4子网中没有可用地址"
+        return 1
     fi
 }
 
@@ -203,7 +213,8 @@ create_interface() {
     fi
 
     # 生成IPv4网关
-    gateway_ip4=$(ipcalc "$subnet4" | grep -m1 "Host address (min)" | awk '{print $NF}')
+    network_info=$(ipcalc -b "$subnet4")
+    gateway_ip4=$(echo "$network_info" | grep 'HostMin' | awk '{print $2}')
 
     # 接口命名
     existing_interfaces=$(ls "$CONFIG_DIR"/wg*.conf 2>/dev/null | sed 's/.*wg\([0-9]\+\).conf/\1/' | sort -n)
