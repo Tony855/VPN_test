@@ -20,7 +20,7 @@ fi
 install_dependencies() {
     echo "正在安装依赖和配置系统..."
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update && apt-get install -y wireguard-tools iptables iptables-persistent sipcalc qrencode curl
+    apt-get update && apt-get install -y wireguard-tools iptables iptables-persistent ipcalc qrencode curl
 
     # 自动保存iptables规则
     echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
@@ -57,8 +57,8 @@ init_ip_pool() {
     fi
     touch "$USED_IP_FILE" 2>/dev/null || :
 
-    # IPv6池初始化
-    if [ ! -f "$PUBLIC_IP6_FILE" ]; then
+    # IPv6池初始化（仅在启用IPv6时检查）
+    if [[ $enable_ipv6 =~ ^[Yy]$ ]] && [ ! -f "$PUBLIC_IP6_FILE" ]; then
         echo "错误: 公网IPv6池文件不存在！"
         echo "请先创建 $PUBLIC_IP6_FILE"
         exit 1
@@ -97,9 +97,9 @@ rollback_ip_allocation() {
 validate_subnet() {
     local subnet=$1
     if [[ "$subnet" == *:* ]]; then
-        sipcalc "$subnet" >/dev/null 2>&1 || { echo "错误: 无效的IPv6子网格式"; return 1; }
+        ipcalc "$subnet" >/dev/null 2>&1 || { echo "错误: 无效的IPv6子网格式"; return 1; }
     else
-        sipcalc "$subnet" >/dev/null 2>&1 || { echo "错误: 无效的IPv4子网格式"; return 1; }
+        ipcalc "$subnet" >/dev/null 2>&1 || { echo "错误: 无效的IPv4子网格式"; return 1; }
     fi
     return 0
 }
@@ -111,7 +111,7 @@ generate_client_ip() {
 
     if [[ "$subnet" == *:* ]]; then
         # IPv6地址分配
-        network_info=$(sipcalc "$subnet")
+        network_info=$(ipcalc "$subnet")
         network_start=$(echo "$network_info" | grep "Expanded address" | awk '{print $4}')
         prefix_length=$(echo "$subnet" | cut -d'/' -f2)
 
@@ -129,7 +129,7 @@ generate_client_ip() {
         return 1
     else
         # IPv4地址分配
-        network_info=$(sipcalc "$subnet")
+        network_info=$(ipcalc "$subnet")
         network_start=$(echo "$network_info" | grep "Network address" | awk '{print $4}')
         IFS='.' read -r a b c d <<< "$network_start"
         for i in $(seq 2 254); do
@@ -151,28 +151,59 @@ get_available_port() {
     done
 }
 
-    init_ip_pool
+create_interface() {
     echo "正在创建新WireGuard接口..."
 
-    # 分配公网IP
-    public_ip4=$(get_available_ip "$PUBLIC_IP_FILE" "$USED_IP_FILE") || { echo "$public_ip4"; return 1; }
-    public_ip6=$(get_available_ip "$PUBLIC_IP6_FILE" "$USED_IP6_FILE") || { echo "$public_ip6"; return 1; }
-    mark_ip_used "$public_ip4" "$USED_IP_FILE"
-    mark_ip_used "$public_ip6" "$USED_IP6_FILE"
+    # 询问是否启用IPv6
+    read -p "是否启用IPv6支持？(y/N) " enable_ipv6
+    enable_ipv6=${enable_ipv6:-N}
 
-    # 输入子网
+    # 初始化IP池（根据IPv6状态）
+    if [[ $enable_ipv6 =~ ^[Yy]$ ]]; then
+        init_ip_pool
+    else
+        # 仅初始化IPv4池
+        if [ ! -f "$PUBLIC_IP_FILE" ]; then
+            echo "错误: 公网IPv4池文件不存在！"
+            echo "请先创建 $PUBLIC_IP_FILE"
+            exit 1
+        fi
+        touch "$USED_IP_FILE" 2>/dev/null || :
+    fi
+
+    # 分配公网IPv4
+    public_ip4=$(get_available_ip "$PUBLIC_IP_FILE" "$USED_IP_FILE") || { echo "$public_ip4"; return 1; }
+    mark_ip_used "$public_ip4" "$USED_IP_FILE"
+
+    # 分配公网IPv6（如果启用）
+    if [[ $enable_ipv6 =~ ^[Yy]$ ]]; then
+        public_ip6=$(get_available_ip "$PUBLIC_IP6_FILE" "$USED_IP6_FILE") || { echo "$public_ip6"; return 1; }
+        mark_ip_used "$public_ip6" "$USED_IP6_FILE"
+    else
+        public_ip6=""
+    fi
+
+    # 输入IPv4子网
     while true; do
         read -p "输入IPv4子网（如 10.10.0.0/24）: " subnet4
         validate_subnet "$subnet4" && break
     done
-    while true; do
-        read -p "输入IPv6子网（如 fd00:1234::/64）: " subnet6
-        validate_subnet "$subnet6" && break
-    done
 
-    # 生成网关地址（修正部分）
-    gateway_ip4=$(sipcalc "$subnet4" | grep -E "Host address\s+-\s+" | awk '{print $NF}')
-    gateway_ip6=$(sipcalc "$subnet6" | grep -A1 "Expanded Address" | grep "Compressed address" | awk '{print $NF}')
+    # 输入IPv6子网（如果启用）
+    if [[ $enable_ipv6 =~ ^[Yy]$ ]]; then
+        while true; do
+            read -p "输入IPv6子网（如 fd00:1234::/64）: " subnet6
+            validate_subnet "$subnet6" && break
+        done
+        # 生成IPv6网关
+        gateway_ip6=$(ipcalc "$subnet6" | grep -m1 "Address (compressed)" | awk '{print $NF}' | cut -d'/' -f1)
+    else
+        subnet6=""
+        gateway_ip6=""
+    fi
+
+    # 生成IPv4网关
+    gateway_ip4=$(ipcalc "$subnet4" | grep -m1 "Host address (min)" | awk '{print $NF}')
 
     # 接口命名
     existing_interfaces=$(ls "$CONFIG_DIR"/wg*.conf 2>/dev/null | sed 's/.*wg\([0-9]\+\).conf/\1/' | sort -n)
@@ -184,61 +215,71 @@ get_available_port() {
     read -p "输入接口名称（默认 $default_iface）: " iface
     iface=${iface:-$default_iface}
 
-    [[ "$iface" =~ [^a-zA-Z0-9] ]] && {
+    # 检查接口名称合法性
+    if [[ "$iface" =~ [^a-zA-Z0-9] ]]; then
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
-        rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
+        [[ -n "$public_ip6" ]] && rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
         echo "错误: 接口名称非法"
         return 1
-    }
-    [ -f "$CONFIG_DIR/$iface.conf" ] && {
+    fi
+
+    # 检查接口配置文件是否已存在
+    if [ -f "$CONFIG_DIR/$iface.conf" ]; then
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
-        rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
+        [[ -n "$public_ip6" ]] && rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
         echo "错误: 接口已存在"
         return 1
-    }
+    fi
 
+    # 检查默认出口接口
     ext_if=$(ip route show default | awk '/default/ {print $5}' | head -1)
-    [ -z "$ext_if" ] && {
+    if [ -z "$ext_if" ]; then
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
-        rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
+        [[ -n "$public_ip6" ]] && rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
         echo "错误: 未找到默认出口接口"
         return 1
-    }
+    fi
 
+    # 生成端口和密钥
     port=$(get_available_port)
     server_private=$(wg genkey)
     server_public=$(echo "$server_private" | wg pubkey)
 
     # 生成配置文件
-    cat > "$CONFIG_DIR/$iface.conf" <<EOF
-[Interface]
-Address = $gateway_ip4/$(echo "$subnet4" | cut -d'/' -f2), $gateway_ip6/$(echo "$subnet6" | cut -d'/' -f2)
-PrivateKey = $server_private
-ListenPort = $port
+    config_content="[Interface]\n"
+    config_content+="Address = $gateway_ip4/$(echo "$subnet4" | cut -d'/' -f2)"
+    if [[ $enable_ipv6 =~ ^[Yy]$ ]]; then
+        config_content+=", $gateway_ip6/$(echo "$subnet6" | cut -d'/' -f2)"
+    fi
+    config_content+="\nPrivateKey = $server_private\nListenPort = $port\n"
 
-# IPv4 NAT规则
-PostUp = iptables -t nat -A POSTROUTING -s $subnet4 -o $ext_if -j SNAT --to-source $public_ip4
-PostDown = iptables -t nat -D POSTROUTING -s $subnet4 -o $ext_if -j SNAT --to-source $public_ip4
+    # IPv4 NAT规则
+    config_content+="\n# IPv4 NAT规则\n"
+    config_content+="PostUp = iptables -t nat -A POSTROUTING -s $subnet4 -o $ext_if -j SNAT --to-source $public_ip4\n"
+    config_content+="PostDown = iptables -t nat -D POSTROUTING -s $subnet4 -o $ext_if -j SNAT --to-source $public_ip4\n"
 
-# IPv6 NAT规则（确保公网IPv6地址正确）
-PostUp = ip6tables -t nat -A POSTROUTING -s $subnet6 -o $ext_if -j SNAT --to-source $public_ip6
-PostDown = ip6tables -t nat -D POSTROUTING -s $subnet6 -o $ext_if -j SNAT --to-source $public_ip6
-EOF
-
-    chmod 600 "$CONFIG_DIR/$iface.conf"
-
-    if [[ "$iface" =~ [^a-zA-Z0-9] ]]; then
-        rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
-        rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
-        echo "错误: 接口名称非法"
-        return 1
+    # IPv6 NAT规则（如果启用）
+    if [[ $enable_ipv6 =~ ^[Yy]$ ]]; then
+        config_content+="\n# IPv6 NAT规则\n"
+        config_content+="PostUp = ip6tables -t nat -A POSTROUTING -s $subnet6 -o $ext_if -j SNAT --to-source $public_ip6\n"
+        config_content+="PostDown = ip6tables -t nat -D POSTROUTING -s $subnet6 -o $ext_if -j SNAT --to-source $public_ip6\n"
     fi
 
-    # 修正接口已存在检查
-    if [ -f "$CONFIG_DIR/$iface.conf" ]; then
+    # 写入配置文件
+    echo -e "$config_content" > "$CONFIG_DIR/$iface.conf"
+    chmod 600 "$CONFIG_DIR/$iface.conf"
+
+    # 启动服务
+    if systemctl enable --now "wg-quick@$iface" &>/dev/null; then
+        echo "接口 $iface 创建成功！"
+        echo "分配公网IPv4: $public_ip4"
+        [[ -n "$public_ip6" ]] && echo "分配公网IPv6: $public_ip6"
+        echo "内网IPv4子网: $subnet4"
+        [[ -n "$subnet6" ]] && echo "内网IPv6子网: $subnet6"
+    else
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
-        rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
-        echo "错误: 接口已存在"
+        [[ -n "$public_ip6" ]] && rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
+        echo "错误: 服务启动失败"
         return 1
     fi
 }
@@ -255,13 +296,25 @@ add_client() {
 
     # 提取配置信息
     subnet4=$(grep 'PostUp.*iptables' "$CONFIG_DIR/$iface.conf" | grep -m1 'SNAT' | awk '{print $8}')
-    subnet6=$(grep 'PostUp.*ip6tables' "$CONFIG_DIR/$iface.conf" | grep -m1 'SNAT' | awk '{print $8}')
     public_ip4=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | grep 'iptables' | awk '{print $NF}' | head -1)
-    public_ip6=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | grep 'ip6tables' | awk '{print $NF}' | head -1)
+    
+    # 检查是否启用IPv6
+    enable_ipv6=$(grep -q "ip6tables" "$CONFIG_DIR/$iface.conf" && echo "Y" || echo "N")
+    if [[ $enable_ipv6 == "Y" ]]; then
+        subnet6=$(grep 'PostUp.*ip6tables' "$CONFIG_DIR/$iface.conf" | grep -m1 'SNAT' | awk '{print $8}')
+        public_ip6=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | grep 'ip6tables' | awk '{print $NF}' | head -1)
+    else
+        subnet6=""
+        public_ip6=""
+    fi
 
     # 生成客户端IP
     client_ip4=$(generate_client_ip "$subnet4" "$iface") || { echo "$client_ip4"; return 1; }
-    client_ip6=$(generate_client_ip "$subnet6" "$iface") || { echo "$client_ip6"; return 1; }
+    if [[ $enable_ipv6 == "Y" ]]; then
+        client_ip6=$(generate_client_ip "$subnet6" "$iface") || { echo "$client_ip6"; return 1; }
+    else
+        client_ip6=""
+    fi
 
     # 客户端命名
     client_count=$(ls "$CLIENT_DIR/$iface"/*.conf 2>/dev/null | wc -l)
@@ -276,38 +329,50 @@ add_client() {
     client_preshared=$(wg genpsk)
 
     # 更新服务端配置
-    cat >> "$CONFIG_DIR/$iface.conf" <<EOF
-
-[Peer]
-# $client_name
-PublicKey = $client_public
-PresharedKey = $client_preshared
-AllowedIPs = $client_ip4/32, $client_ip6/128
-EOF
+    peer_config="\n[Peer]\n# $client_name\n"
+    peer_config+="PublicKey = $client_public\n"
+    peer_config+="PresharedKey = $client_preshared\n"
+    peer_config+="AllowedIPs = $client_ip4/32"
+    if [[ -n "$client_ip6" ]]; then
+        peer_config+=", $client_ip6/128"
+    fi
+    echo -e "$peer_config" >> "$CONFIG_DIR/$iface.conf"
 
     # 生成客户端配置
     mkdir -p "$CLIENT_DIR/$iface"
     client_file="$CLIENT_DIR/$iface/$client_name.conf"
-    cat > "$client_file" <<EOF
-[Interface]
-PrivateKey = $client_private
-Address = $client_ip4/$(echo "$subnet4" | cut -d'/' -f2), $client_ip6/$(echo "$subnet6" | cut -d'/' -f2)
-DNS = 2001:4860:4860::8888, 8.8.8.8
+    client_config="[Interface]\n"
+    client_config+="PrivateKey = $client_private\n"
+    client_config+="Address = $client_ip4/$(echo "$subnet4" | cut -d'/' -f2)"
+    if [[ -n "$client_ip6" ]]; then
+        client_config+=", $client_ip6/$(echo "$subnet6" | cut -d'/' -f2)\n"
+        client_config+="DNS = 2001:4860:4860::8888, 8.8.8.8\n"
+    else
+        client_config+="\nDNS = 8.8.8.8\n"
+    fi
 
-[Peer]
-PublicKey = $(wg pubkey < <(grep 'PrivateKey' "$CONFIG_DIR/$iface.conf" | awk '{print $3}'))
-PresharedKey = $client_preshared
-Endpoint = [$public_ip6]:$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-EOF
+    client_config+="\n[Peer]\n"
+    client_config+="PublicKey = $(wg pubkey < <(grep 'PrivateKey' "$CONFIG_DIR/$iface.conf" | awk '{print $3}'))\n"
+    client_config+="PresharedKey = $client_preshared\n"
+    if [[ -n "$public_ip6" ]]; then
+        client_config+="Endpoint = [$public_ip6]:$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')\n"
+    else
+        client_config+="Endpoint = $public_ip4:$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')\n"
+    fi
+    client_config+="AllowedIPs = 0.0.0.0/0"
+    if [[ -n "$client_ip6" ]]; then
+        client_config+=", ::/0"
+    fi
+    client_config+="\nPersistentKeepalive = 25\n"
+
+    echo -e "$client_config" > "$client_file"
 
     # 生成二维码
     qrencode -t ansiutf8 < "$client_file"
     qrencode -o "${client_file}.png" < "$client_file"
 
     systemctl restart "wg-quick@$iface" &>/dev/null || wg syncconf "$iface" <(wg-quick strip "$iface")
-    echo "客户端 $client_name 添加成功！双栈配置已生成：$client_file"
+    echo "客户端 $client_name 添加成功！配置已生成：$client_file"
 }
 
 uninstall_wireguard() {
