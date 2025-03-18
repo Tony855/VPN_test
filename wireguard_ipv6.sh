@@ -151,6 +151,7 @@ get_available_port() {
     done
 }
 
+() {
     init_ip_pool
     echo "正在创建新WireGuard接口..."
 
@@ -227,16 +228,18 @@ EOF
 
     chmod 600 "$CONFIG_DIR/$iface.conf"
 
-    if systemctl enable --now "wg-quick@$iface" &>/dev/null; then
-        echo "接口 $iface 创建成功！"
-        echo "分配公网IPv4: $public_ip4"
-        echo "分配公网IPv6: $public_ip6"
-        echo "内网IPv4子网: $subnet4"
-        echo "内网IPv6子网: $subnet6"
-    else
+    if [[ "$iface" =~ [^a-zA-Z0-9] ]]; then
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
         rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
-        echo "错误: 服务启动失败"
+        echo "错误: 接口名称非法"
+        return 1
+    fi
+
+    # 修正接口已存在检查
+    if [ -f "$CONFIG_DIR/$iface.conf" ]; then
+        rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
+        rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
+        echo "错误: 接口已存在"
         return 1
     fi
 }
