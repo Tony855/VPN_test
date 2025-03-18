@@ -21,11 +21,11 @@ install_dependencies() {
     echo "正在安装依赖和配置系统..."
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y wireguard-tools iptables ip6tables iptables-persistent sipcalc qrencode curl
-    
+
     # 自动保存iptables规则
     echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
     echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
-    
+
     # 配置sysctl参数
     sysctl_conf=(
         "net.ipv4.ip_forward=1"
@@ -103,13 +103,13 @@ generate_client_ip() {
     local subnet=$1
     local config_file=$2
     local existing_ips=($(grep AllowedIPs "$CONFIG_DIR/$config_file.conf" 2>/dev/null | awk '{print $3}' | cut -d'/' -f1))
-    
+
     if [[ "$subnet" == *:* ]]; then
         # IPv6地址分配
         network_info=$(sipcalc "$subnet")
         network_start=$(echo "$network_info" | grep "Expanded address" | awk '{print $4}')
         prefix_length=$(echo "$subnet" | cut -d'/' -f2)
-        
+
         # 生成随机后缀（避免冲突）
         for _ in {1..10}; do
             suffix=$(od -An -N8 -tx8 /dev/urandom | tr -d ' ' | sed 's/^0000//')
@@ -149,7 +149,7 @@ get_available_port() {
 create_interface() {
     init_ip_pool
     echo "正在创建新WireGuard接口..."
-    
+
     # 分配公网IP
     public_ip4=$(get_available_ip "$PUBLIC_IP_FILE" "$USED_IP_FILE") || { echo "$public_ip4"; return 1; }
     public_ip6=$(get_available_ip "$PUBLIC_IP6_FILE" "$USED_IP6_FILE") || { echo "$public_ip6"; return 1; }
@@ -176,17 +176,17 @@ create_interface() {
     [ -z "$max_interface" ] && max_interface=-1
     new_interface=$((max_interface + 1))
     default_iface="wg${new_interface}"
-    
+
     read -p "输入接口名称（默认 $default_iface）: " iface
     iface=${iface:-$default_iface}
-    
-    [[ "$iface" =~ [^a-zA-Z0-9] ]] && { 
+
+    [[ "$iface" =~ [^a-zA-Z0-9] ]] && {
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
         rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
         echo "错误: 接口名称非法"
         return 1
     }
-    [ -f "$CONFIG_DIR/$iface.conf" ] && { 
+    [ -f "$CONFIG_DIR/$iface.conf" ] && {
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
         rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
         echo "错误: 接口已存在"
@@ -194,10 +194,11 @@ create_interface() {
     }
 
     ext_if=$(ip route show default | awk '/default/ {print $5}' | head -1)
-    [ -z "$ext_if" ] && { 
+    [ -z "$ext_if" ] && {
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
         rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
-        echo "错误: 未找到默认出口接口"; return 1 
+        echo "错误: 未找到默认出口接口"
+        return 1
     }
 
     port=$(get_available_port)
@@ -238,10 +239,10 @@ EOF
 
 add_client() {
     echo "正在添加新客户端..."
-    
+
     latest_iface=$(ls -t "$CONFIG_DIR"/*.conf | xargs -n1 basename | cut -d. -f1 | head -1)
     [ -z "$latest_iface" ] && { echo "错误: 没有可用接口"; return 1; }
-    
+
     read -p "选择接口（默认 $latest_iface）: " iface
     iface=${iface:-$latest_iface}
     [ ! -f "$CONFIG_DIR/$iface.conf" ] && { echo "错误: 接口不存在"; return 1; }
@@ -306,20 +307,20 @@ EOF
 uninstall_wireguard() {
     read -p "确定要完全卸载WireGuard吗？(y/N) " confirm
     [[ ! $confirm =~ ^[Yy]$ ]] && return
-    
+
     echo "正在卸载WireGuard..."
     find "$CONFIG_DIR" -name '*.conf' -exec basename {} .conf \; | while read -r iface; do
         systemctl stop "wg-quick@$iface"
     done
-    
+
     rm -rf "$CONFIG_DIR"
     apt-get purge -y wireguard-tools iptables-persistent qrencode
-    
+
     iptables -F
     iptables -t nat -F
     ip6tables -F
     ip6tables -t nat -F
-    
+
     echo "WireGuard已完全卸载"
 }
 
@@ -335,7 +336,7 @@ main_menu() {
             "创建接口") create_interface ;;
             "添加客户端") add_client ;;
             "完全卸载") uninstall_wireguard ;;
-            "退出") 
+            "退出")
                 iptables-save > /etc/iptables/rules.v4
                 ip6tables-save > /etc/iptables/rules.v6
                 echo "配置已保存，再见！"
