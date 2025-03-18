@@ -211,7 +211,7 @@ PublicKey = $(grep 'PrivateKey' "$CONFIG_DIR/$iface.conf" | awk '{print $3}' | w
 PresharedKey = $client_preshared
 Endpoint = $(echo "$public_ip" | tr -d '\r'):$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')
 AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
+PersistentKeepalive = 15
 EOF
 
     qrencode -t ansiutf8 < "$client_file"
