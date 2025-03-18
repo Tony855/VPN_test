@@ -151,7 +151,7 @@ get_available_port() {
     done
 }
 
-create_interface() {
+() {
     init_ip_pool
     echo "正在创建新WireGuard接口..."
 
@@ -171,9 +171,9 @@ create_interface() {
         validate_subnet "$subnet6" && break
     done
 
-    # 生成网关地址
-    gateway_ip4=$(sipcalc "$subnet4" | grep "Host address" | awk '{print $4}')
-    gateway_ip6=$(sipcalc "$subnet6" | grep "Expanded address" | awk '{print $4}' | sed 's/::1$/::1/')
+    # 生成网关地址（修正部分）
+    gateway_ip4=$(sipcalc "$subnet4" | grep -E "Host address\s+-\s+" | awk '{print $NF}')
+    gateway_ip6=$(sipcalc "$subnet6" | grep -A1 "Expanded Address" | grep "Compressed address" | awk '{print $NF}')
 
     # 接口命名
     existing_interfaces=$(ls "$CONFIG_DIR"/wg*.conf 2>/dev/null | sed 's/.*wg\([0-9]\+\).conf/\1/' | sort -n)
@@ -221,7 +221,7 @@ ListenPort = $port
 PostUp = iptables -t nat -A POSTROUTING -s $subnet4 -o $ext_if -j SNAT --to-source $public_ip4
 PostDown = iptables -t nat -D POSTROUTING -s $subnet4 -o $ext_if -j SNAT --to-source $public_ip4
 
-# IPv6 NAT规则
+# IPv6 NAT规则（确保公网IPv6地址正确）
 PostUp = ip6tables -t nat -A POSTROUTING -s $subnet6 -o $ext_if -j SNAT --to-source $public_ip6
 PostDown = ip6tables -t nat -D POSTROUTING -s $subnet6 -o $ext_if -j SNAT --to-source $public_ip6
 EOF
