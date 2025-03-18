@@ -151,7 +151,6 @@ get_available_port() {
     done
 }
 
-() {
     init_ip_pool
     echo "正在创建新WireGuard接口..."
 
