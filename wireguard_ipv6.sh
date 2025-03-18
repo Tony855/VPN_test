@@ -26,6 +26,11 @@ install_dependencies() {
     echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
     echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
 
+    # 确保 ip6tables 命令可用（兼容性修复）
+    if ! command -v ip6tables &>/dev/null; then
+        ln -s /usr/sbin/iptables /usr/sbin/ip6tables 2>/dev/null || true
+    fi
+
     # 配置sysctl参数
     sysctl_conf=(
         "net.ipv4.ip_forward=1"
