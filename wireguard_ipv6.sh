@@ -180,15 +180,17 @@ create_interface() {
     read -p "输入接口名称（默认 $default_iface）: " iface
     iface=${iface:-$default_iface}
     
-    [[ "$iface" =~ [^a-zA-Z0-9] ]] && { 
+    [[ "$iface" =~ [^a-zA-Z0-9] ]] && { 
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
         rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
-        echo "错误: 接口名称非法"; return 1 
+        echo "错误: 接口名称非法"
+        return 1
     }
-    [ -f "$CONFIG_DIR/$iface.conf" ] && { 
+    [ -f "$CONFIG_DIR/$iface.conf" ] && { 
         rollback_ip_allocation "$public_ip4" "$USED_IP_FILE"
         rollback_ip_allocation "$public_ip6" "$USED_IP6_FILE"
-        echo "错误: 接口已存在"; return 1 
+        echo "错误: 接口已存在"
+        return 1
     }
 
     ext_if=$(ip route show default | awk '/default/ {print $5}' | head -1)
