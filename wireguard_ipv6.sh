@@ -362,6 +362,8 @@ main_menu() {
             "添加客户端") add_client ;;
             "完全卸载") uninstall_wireguard ;;
             "退出")
+                # 确保目录存在
+                mkdir -p /etc/iptables
                 iptables-save > /etc/iptables/rules.v4
                 ip6tables-save > /etc/iptables/rules.v6
                 echo "配置已保存，再见！"
