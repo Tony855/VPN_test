@@ -137,7 +137,6 @@ generate_client_ip() {
     else
         # IPv4处理
         network_info=$(sipcalc "$subnet")
-        network_info=$(sipcalc "$subnet4")
         hostmin=$(echo "$network_info" | grep "Usable range" | awk '{print $4}')
         hostmax=$(echo "$network_info" | grep "Usable range" | awk '{print $6}')
 
@@ -275,11 +274,11 @@ add_client() {
 
     # 提取子网信息
     subnet4=$(grep 'PostUp.*iptables' "$CONFIG_DIR/$iface.conf" | grep -oP '\-s \K[0-9./]+')
-    public_ip4=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | awk '{print $NF}' | head -1)
+    public_ip4=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | awk '{print $NF}' | head -1 | tr -d '\n')
     enable_ipv6=$(grep -q "ip6tables" "$CONFIG_DIR/$iface.conf" && echo "Y" || echo "N")
     if [[ $enable_ipv6 == "Y" ]]; then
         subnet6=$(grep 'PostUp.*ip6tables' "$CONFIG_DIR/$iface.conf" | awk '{print $8}')
-        public_ip6=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | awk '{print $NF}' | head -1)
+        public_ip6=$(grep 'SNAT' "$CONFIG_DIR/$iface.conf" | awk '{print $NF}' | head -1 | tr -d '\n')
     else
         subnet6=""; public_ip6=""
     fi
@@ -313,14 +312,14 @@ add_client() {
     cat > "$client_file" << EOF
 [Interface]
 PrivateKey = $client_private
-Address = $client_ip4/$(cut -d'/' -f2 <<< "$subnet4")
-$( [[ -n "$client_ip6" ]] && echo "Address = $client_ip6/$(cut -d'/' -f2 <<< "$subnet6")" )
+Address = $client_ip4/32
+$( [[ -n "$client_ip6" ]] && echo "Address = $client_ip6/128" )
 DNS = 8.8.8.8, 2001:4860:4860::8888
 
 [Peer]
 PublicKey = $(grep 'PrivateKey' "$CONFIG_DIR/$iface.conf" | awk '{print $3}' | wg pubkey)
 PresharedKey = $client_preshared
-Endpoint = ${public_ip6:+[$public_ip6]}${public_ip6:-$public_ip4}:$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}')
+Endpoint = ${public_ip6:+[$public_ip6]}${public_ip6:-$public_ip4}:$(grep ListenPort "$CONFIG_DIR/$iface.conf" | awk '{print $3}' | tr -d '\n')
 AllowedIPs = 0.0.0.0/0${client_ip6:+, ::/0}
 PersistentKeepalive = 25
 EOF
