@@ -321,8 +321,9 @@ add_client() {
         client_ip6=$(generate_client_ip "$subnet6" "$iface") || { echo "$client_ip6"; return 1; }
     fi
 
-    read -p "输入客户端名称（默认 client$(( $(ls "$CLIENT_DIR/$iface"/*.conf 2>/dev/null | wc -l) + 1 ))）: " client_name
-    client_name=${client_name:-"client$(( $(ls "$CLIENT_DIR/$iface"/*.conf 2>/dev/null | wc -l) + 1 ))"}
+    client_name_default="${iface}_${client_ip4}"
+    read -p "输入客户端名称（默认 $client_name_default）: " client_name
+    client_name=${client_name:-"$client_name_default"}
     [[ "$client_name" =~ [/\\] ]] && { echo "错误: 名称含非法字符"; return 1; }
 
     client_private=$(wg genkey)
