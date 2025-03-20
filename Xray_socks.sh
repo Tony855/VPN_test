@@ -14,18 +14,44 @@ generate_random_password() {
     cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1
 }
 
+detect_group() {
+    if grep -q '^nobody:' /etc/group; then
+        echo "nobody"
+    elif grep -q '^nogroup:' /etc/group; then
+        echo "nogroup"
+    else
+        echo "root"
+        echo "警告：未找到标准无主组，使用 root 组可能存在安全风险" >&2
+    fi
+}
+
 install_xray() {
     echo "安装 Xray..."
-    apt-get install unzip -y || yum install unzip -y
+    sudo rm -rf /var/log/xrayL
+    
+    if ! mkdir -p /var/log/xrayL; then
+        echo "错误：无法创建日志目录" >&2
+        exit 1
+    fi
+    
+    TARGET_GROUP=$(detect_group)
+    
+    if ! chown -R nobody:$TARGET_GROUP /var/log/xrayL; then
+        echo "错误：权限设置失败，请手动检查系统组配置" >&2
+        exit 1
+    fi
+    chmod 750 /var/log/xrayL
+    apt-get install unzip jp -y || yum install unzip jp -y
     wget https://github.com/XTLS/Xray-core/releases/download/v25.3.6/Xray-linux-64.zip
     unzip Xray-linux-64.zip
     mv xray /usr/local/bin/xrayL
     chmod +x /usr/local/bin/xrayL
     
-    # 创建日志目录并设置权限
+    # 创建日志目录并设置权限（动态获取组名）
+    TARGET_GROUP=$(detect_group)
     mkdir -p /var/log/xrayL
-    chown nobody:nobody /var/log/xrayL
-    chmod 700 /var/log/xrayL
+    chown nobody:$TARGET_GROUP /var/log/xrayL  # 修改这里
+    chmod 750 /var/log/xrayL  # 权限调整为更安全模式
 
     cat <<EOF >/etc/systemd/system/xrayL.service
 [Unit]
