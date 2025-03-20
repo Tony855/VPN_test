@@ -149,11 +149,11 @@ stats_ips() {
         apt-get install -y jq || yum install -y jq
     fi
     
-    echo -e "\033[36m最近10个连接IP:\033[0m"
-    tail -n 100 /var/log/xrayL/access.log | jq -r 'select(.msg == "inbound connection accepted") | .remoteAddr' | cut -d':' -f1 | sort | uniq -c | sort -nr | head -n 10
+    echo -e "\033[36m最近500个连接IP:\033[0m"
+    tail -n 100 /var/log/xrayL/access.log | jq -r 'select(.msg == "inbound connection accepted") | .remoteAddr' | cut -d':' -f1 | sort | uniq -c | sort -nr | head -n 500
     
-    echo -e "\n\033[36m历史连接TOP10:\033[0m"
-    jq -r 'select(.msg == "inbound connection accepted") | .remoteAddr' /var/log/xrayL/access.log | cut -d':' -f1 | sort | uniq -c | sort -nr | head -n 10
+    echo -e "\n\033[36m历史连接TOP500:\033[0m"
+    jq -r 'select(.msg == "inbound connection accepted") | .remoteAddr' /var/log/xrayL/access.log | cut -d':' -f1 | sort | uniq -c | sort -nr | head -n 500
 }
 
 main() {
