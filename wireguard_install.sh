@@ -159,9 +159,13 @@ generate_client_ip() {
         echo "错误: IPv6子网中没有可用地址"
         return 1
     else
-        network_info=$(sipcalc "$subnet")
-        hostmin=$(echo "$network_info" | grep "Usable range" | awk '{print $4}')
-        hostmax=$(echo "$network_info" | grep "Usable range" | awk '{print $6}')
+        network_info=$(sipcalc "$subnet4")
+        # 使用 "Network range" 或 "Usable range" 根据实际sipcalc版本调整
+        hostmin=$(echo "$network_info" | grep -m1 "Network range" | awk '{print $4}')
+        hostmax=$(echo "$network_info" | grep -m1 "Network range" | awk '{print $6}')
+        # 如果上述无效，尝试：
+        # hostmin=$(echo "$network_info" | grep "Usable range" | awk '{print $4}')
+        # hostmax=$(echo "$network_info" | grep "Usable range" | awk '{print $6}')
 
         IFS='.' read -r a b c d_start <<< "$hostmin"
         IFS='.' read -r a b c d_end <<< "$hostmax"
