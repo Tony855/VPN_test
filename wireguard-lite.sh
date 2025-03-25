@@ -20,7 +20,10 @@ fi
 install_dependencies() {
     echo "正在安装依赖和配置系统..."
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update && apt-get install -y wireguard-tools iptables iptables-persistent sipcalc qrencode curl iftop
+    if ! apt-get update && apt-get install -y wireguard-tools iptables iptables-persistent sipcalc qrencode curl iftop; then
+        echo "错误: 依赖安装失败"
+        exit 1
+    fi
     
     # 自动保存iptables规则
     echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
@@ -31,7 +34,9 @@ install_dependencies() {
     for param in "${sysctl_conf[@]}"; do
         grep -qxF "$param" /etc/sysctl.conf || echo "$param" >> /etc/sysctl.conf
     done
-    sysctl -p >/dev/null 2>&1
+    if ! sysctl -p >/dev/null 2>&1; then
+        echo "警告: sysctl加载失败"
+    fi
     echo "系统配置完成！"
 }
 
@@ -74,7 +79,7 @@ rollback_ip_allocation() {
 generate_client_ip() {
     local subnet=$1
     local config_file=$2
-    local existing_ips=($(grep AllowedIPs "$CONFIG_DIR/$config_file.conf" 2>/dev/null | awk -F'[ ,]' '{for(i=3; i<=NF; i++) print $i}' | cut -d'/' -f1))
+    local existing_ips=($(grep AllowedIPs "$CONFIG_DIR/$config_file.conf" 2>/dev/null | awk -F'[ ,]' '{for(i=3; i<=NF; i++) print $i}' | cut -d'/' -f1 | sort -u))
     
     local network_info=$(sipcalc "$subnet" 2>/dev/null)
     local network=$(echo "$network_info" | grep "Network address" | awk '{print $4}')
@@ -83,21 +88,27 @@ generate_client_ip() {
     for i in $(seq 2 254); do
         candidate_ip=$(echo "$network" | awk -F. -v i="$i" '{OFS="."; $4=i; print $0}')
         [[ "$candidate_ip" == "$broadcast" ]] && continue
-        [[ " ${existing_ips[@]} " =~ " $candidate_ip " ]] || break
+        if ! [[ " ${existing_ips[@]} " =~ " $candidate_ip " ]]; then
+            echo "$candidate_ip"
+            return 0
+        fi
     done
     
-    echo "$candidate_ip"
+    echo "错误: 子网IP已耗尽"
+    return 1
 }
 
 get_available_port() {
     base_port=51620
-    while :; do
+    while [ $base_port -lt 52000 ]; do
         if ! ss -uln | grep -q ":$base_port "; then
             echo $base_port
-            break
+            return 0
         fi
         ((base_port++))
     done
+    echo "错误: 未找到可用端口"
+    return 1
 }
 
 create_interface() {
@@ -116,18 +127,18 @@ create_interface() {
     ext_if=$(ip route show default | awk '/default/ {print $5}' | head -1)
     [ -z "$ext_if" ] && { echo "错误: 未找到默认出口接口"; rollback_ip_allocation "$public_ip"; return 1; }
 
-    port=$(get_available_port)
+    port=$(get_available_port) || { rollback_ip_allocation "$public_ip"; return 1; }
 
     server_private=$(wg genkey)
     server_public=$(echo "$server_private" | wg pubkey)
 
     cat > "$CONFIG_DIR/$FIXED_IFACE.conf" <<EOF
 [Interface]
-Address = 10.10.0.1/24  # 固定子网网关
+Address = 10.10.0.1/24
 PrivateKey = $server_private
 ListenPort = $port
 
-# NAT规则（仅处理无独立IP的客户端）
+# NAT规则
 PostUp = iptables -t nat -A POSTROUTING -s $SUBNET -o $ext_if -j SNAT --to-source $public_ip
 PostDown = iptables -t nat -D POSTROUTING -s $SUBNET -o $ext_if -j SNAT --to-source $public_ip
 EOF
@@ -140,6 +151,7 @@ EOF
         echo "内网子网: $SUBNET"
     else
         rollback_ip_allocation "$public_ip"
+        rm -f "$CONFIG_DIR/$FIXED_IFACE.conf"
         echo "错误: 服务启动失败"
         return 1
     fi
@@ -163,12 +175,15 @@ add_client() {
     client_name=${client_name:-$default_name}
     [[ "$client_name" =~ [/\\] ]] && { echo "错误: 名称含非法字符"; return 1; }
 
-    client_ip=$(generate_client_ip "$SUBNET" "$FIXED_IFACE")
+    client_ip=$(generate_client_ip "$SUBNET" "$FIXED_IFACE") || { echo "$client_ip"; return 1; }
     client_private=$(wg genkey)
     client_public=$(echo "$client_private" | wg pubkey)
     client_preshared=$(wg genpsk)
 
-    cat >> "$CONFIG_DIR/$FIXED_IFACE.conf" <<EOF
+    # 添加Peer配置
+    tmp_conf=$(mktemp)
+    grep -v '^$' "$CONFIG_DIR/$FIXED_IFACE.conf" > "$tmp_conf"
+    cat >> "$tmp_conf" <<EOF
 
 [Peer]
 # $client_name
@@ -180,17 +195,28 @@ EOF
     read -p "是否为该客户端指定独立公网IP？(y/N) " custom_ip
     if [[ $custom_ip =~ ^[Yy]$ ]]; then
         read -p "输入自定义公网IP: " client_nat_ip
-        # 修正规则格式：确保正确空格和引号
-        rule_cmd="iptables -t nat -I POSTROUTING 1 -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
-        post_down_cmd="iptables -t nat -D POSTROUTING -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
+        if ! grep -q "$client_nat_ip" "$PUBLIC_IP_FILE"; then
+            echo "警告: 该IP不在公网IP池中"
+        fi
         
-        # 使用模板插入确保格式正确
-        sed -i "/PostUp/a $rule_cmd" "$CONFIG_DIR/$FIXED_IFACE.conf"
-        sed -i "/PostDown/a $post_down_cmd" "$CONFIG_DIR/$FIXED_IFACE.conf"
+        # 使用printf确保格式正确
+        rule_up="iptables -t nat -I POSTROUTING 1 -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
+        rule_down="iptables -t nat -D POSTROUTING -s $client_ip/32 -o $ext_if -j SNAT --to-source $client_nat_ip"
         
-        eval "$rule_cmd"
+        awk -v rule="$rule_up" '/PostUp =/{print; print "PostUp = " rule; next}1' "$tmp_conf" > "${tmp_conf}.new"
+        mv "${tmp_conf}.new" "$tmp_conf"
+        
+        awk -v rule="$rule_down" '/PostDown =/{print; print "PostDown = " rule; next}1' "$tmp_conf" > "${tmp_conf}.new"
+        mv "${tmp_conf}.new" "$tmp_conf"
+        
+        eval "$rule_up"
     fi
 
+    # 保存配置
+    chmod 600 "$tmp_conf"
+    mv "$tmp_conf" "$CONFIG_DIR/$FIXED_IFACE.conf"
+
+    # 生成客户端配置
     mkdir -p "$CLIENT_DIR/$FIXED_IFACE"
     client_file="$CLIENT_DIR/$FIXED_IFACE/$client_name.conf"
     cat > "$client_file" <<EOF
@@ -207,22 +233,26 @@ AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 15
 EOF
 
+    chmod 600 "$client_file"
     qrencode -t ansiutf8 < "$client_file"
     qrencode -o "${client_file}.png" < "$client_file"
+    chmod 600 "${client_file}.png"
 
-    # 动态加载配置避免重启
-    if ! wg syncconf "$FIXED_IFACE" <(wg-quick strip "$FIXED_IFACE"); then
-        echo "警告: 动态加载配置失败，尝试重启接口..."
-        systemctl restart "wg-quick@$FIXED_IFACE" || {
-            echo "错误: 接口重启失败，请手动检查配置"
+    # 动态加载配置
+    if wg syncconf "$FIXED_IFACE" <(wg-quick strip "$FIXED_IFACE") 2>/dev/null; then
+        echo "配置已动态加载"
+    else
+        echo "警告: 动态加载失败，尝试重启接口..."
+        if ! systemctl restart "wg-quick@$FIXED_IFACE"; then
+            echo "错误: 接口重启失败"
             return 1
-        }
+        fi
     fi
 
     echo "客户端 $client_name 添加成功！"
     echo "出口公网IP: ${client_nat_ip:-$public_ip}"
-    echo "配置文件路径：$client_file"
-    echo "二维码文件：${client_file}.png"
+    echo "配置文件: $client_file"
+    echo "二维码: ${client_file}.png"
 }
 
 uninstall_wireguard() {
@@ -230,9 +260,9 @@ uninstall_wireguard() {
     [[ ! $confirm =~ ^[Yy]$ ]] && return
     
     echo "正在卸载WireGuard..."
-    systemctl stop "wg-quick@$FIXED_IFACE"
+    systemctl stop "wg-quick@$FIXED_IFACE" 2>/dev/null
     rm -rf "$CONFIG_DIR"
-    apt-get purge -y wireguard-tools iptables-persistent qrencode
+    apt-get purge -y --auto-remove wireguard-tools iptables-persistent qrencode
     
     iptables -F
     iptables -t nat -F
@@ -253,7 +283,7 @@ main_menu() {
             "添加客户端") add_client ;;
             "完全卸载") uninstall_wireguard ;;
             "退出") 
-                iptables-save > /etc/iptables/rules.v4
+                iptables-save > /etc/iptables/rules.v4 2>/dev/null
                 echo "配置已保存，再见！"
                 break ;;
             *) echo "无效选项" ;;
