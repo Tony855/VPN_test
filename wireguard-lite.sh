@@ -229,7 +229,7 @@ DNS = 8.8.8.8, 9.9.9.9
 PublicKey = $(grep 'PrivateKey' "$CONFIG_DIR/$FIXED_IFACE.conf" | awk '{print $3}' | wg pubkey)
 PresharedKey = $client_preshared
 Endpoint = $(echo "$public_ip" | tr -d '\r'):$(grep ListenPort "$CONFIG_DIR/$FIXED_IFACE.conf" | awk '{print $3}')
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 15
 EOF
 
