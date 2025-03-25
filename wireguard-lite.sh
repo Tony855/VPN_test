@@ -6,7 +6,7 @@ CLIENT_DIR="$CONFIG_DIR/clients"
 PUBLIC_IP_FILE="$CONFIG_DIR/public_ips.txt"
 USED_IP_FILE="$CONFIG_DIR/used_ips.txt"
 FIXED_IFACE="wg0"  # 固定接口名称
-SUBNET="10.10.0.0/24"  # 固定子网
+SUBNET="10.19.0.0/24"  # 固定子网
 
 # 检查root权限
 if [ "$EUID" -ne 0 ]; then
@@ -134,7 +134,7 @@ create_interface() {
 
     cat > "$CONFIG_DIR/$FIXED_IFACE.conf" <<EOF
 [Interface]
-Address = 10.10.0.1/24
+Address = 10.19.0.1/24
 PrivateKey = $server_private
 ListenPort = $port
 
